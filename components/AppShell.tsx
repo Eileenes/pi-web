@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
 import { SourceControlPanel } from "./SourceControlPanel";
+import { ActivityBar, type ActivityBarView } from "./ActivityBar";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
@@ -79,6 +80,7 @@ export function AppShell() {
   const [projectTrustError, setProjectTrustError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarView, setSidebarView] = useState<"sessions" | "scm">("sessions");
+  const [scmChangeCount, setScmChangeCount] = useState<number | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   const sidebarWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
@@ -224,6 +226,47 @@ export function AppShell() {
     if (isMobile) setActiveTopPanel(null);
     setSidebarOpen((open) => !open);
   }, [isMobile]);
+
+  // VSCode 风格 Activity Bar 点击：切换视图；点击当前视图图标则收起/展开侧栏
+  const handleActivityClick = useCallback((view: ActivityBarView) => {
+    setSidebarView(view);
+    if (sidebarView === view && sidebarOpen) {
+      setSidebarOpen(false);
+    } else {
+      setSidebarOpen(true);
+    }
+  }, [sidebarView, sidebarOpen]);
+
+  // Activity Bar 的 git 变更数 badge：轮询当前项目状态
+  const activeProjectCwd = selectedSession?.cwd ?? newSessionCwd ?? null;
+  useEffect(() => {
+    if (!activeProjectCwd) {
+      setScmChangeCount(null);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/git/status?cwd=${encodeURIComponent(activeProjectCwd)}`);
+        if (!res.ok) return;
+        const data = await res.json() as { isGitRepository?: boolean; files?: unknown[] };
+        if (!cancelled) {
+          setScmChangeCount(data.isGitRepository ? (data.files?.length ?? 0) : null);
+        }
+      } catch {
+        // badge 静默失败
+      }
+    };
+    void load();
+    const id = setInterval(() => {
+      // 后台 Tab 暂停轮询，与侧栏 running 轮询保持一致
+      if (document.visibilityState === "visible") void load();
+    }, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [activeProjectCwd]);
 
   useEffect(() => {
     if (!activeTopPanel || !topBarRef.current) return;
@@ -839,6 +882,9 @@ export function AppShell() {
           transition: "opacity 0.25s ease",
         }}
       />
+
+      {/* Activity bar (desktop only, VSCode-style) */}
+      <ActivityBar view={sidebarView} onViewChange={handleActivityClick} changeCount={scmChangeCount} />
 
       {/* Left sidebar */}
       <div

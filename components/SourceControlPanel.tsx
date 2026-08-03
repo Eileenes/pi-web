@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { GitBranchInfo, GitFileStatus, GitLogEntry, GitStatusResponse } from "@/lib/git-types";
+import type { GitBranchInfo, GitFileStatus, GitStatusResponse } from "@/lib/git-types";
 import { useI18n } from "@/hooks/useI18n";
 import { confirmDialog } from "@/lib/confirm";
+import { GitHistoryPanel } from "./GitHistoryPanel";
 
 interface Props {
   cwd: string | null;
@@ -37,50 +38,11 @@ function relPath(abs: string, root: string): string {
   return r.replace(/^[/\\]+/, "");
 }
 
-interface DirNode {
-  type: "dir";
-  name: string;
-  relPath: string;
-  children: TreeNode[];
-}
 interface FileNode {
   type: "file";
   name: string;
   relPath: string;
   file: GitFileStatus;
-}
-type TreeNode = DirNode | FileNode;
-
-function buildTree(files: GitFileStatus[], root: string): TreeNode[] {
-  const dirs = new Map<string, DirNode>();
-  const rootChildren: TreeNode[] = [];
-  for (const file of files) {
-    const rel = relPath(file.filePath, root);
-    const parts = rel.split("/");
-    const fileName = parts.pop() || rel;
-    let children = rootChildren;
-    let curRel = "";
-    for (const part of parts) {
-      curRel = curRel ? `${curRel}/${part}` : part;
-      let dir = dirs.get(curRel);
-      if (!dir) {
-        dir = { type: "dir", name: part, relPath: curRel, children: [] };
-        dirs.set(curRel, dir);
-        children.push(dir);
-      }
-      children = dir.children;
-    }
-    children.push({ type: "file", name: fileName, relPath: rel, file });
-  }
-  const sortChildren = (nodes: TreeNode[]) => {
-    nodes.sort((a, b) => {
-      if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
-    for (const n of nodes) if (n.type === "dir") sortChildren(n.children);
-  };
-  sortChildren(rootChildren);
-  return rootChildren;
 }
 
 function splitGroups(files: GitFileStatus[]): {
@@ -106,71 +68,14 @@ function splitGroups(files: GitFileStatus[]): {
   return { staged, unstaged, untracked };
 }
 
-function DirNodeView({
-  node,
-  depth,
-  actions,
-  t,
-  selected,
-  onToggleSelect,
-}: {
-  node: DirNode;
-  depth: number;
-  actions: {
-    onStage: (f: GitFileStatus) => void;
-    onUnstage: (f: GitFileStatus) => void;
-    onDiscard: (f: GitFileStatus) => void;
-    onOpenFile: (f: GitFileStatus) => void;
-    staged: boolean;
-  };
-  t: ReturnType<typeof useI18n>["t"];
-  selected: Set<string>;
-  onToggleSelect: (p: string) => void;
-}) {
-  const [collapsed, setCollapsed] = useState(false);
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setCollapsed((c) => !c)}
-        style={{
-          display: "flex", alignItems: "center", gap: 4, width: "100%", height: 22,
-          padding: "0 6px", paddingLeft: 4 + depth * 12,
-          border: "none", background: "transparent", color: "var(--text-muted)",
-          cursor: "pointer", fontSize: 11, textAlign: "left", borderRadius: 4,
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-      >
-        <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" style={{ flexShrink: 0, transform: collapsed ? "rotate(-90deg)" : "none", transition: "transform 0.1s" }}>
-          <polyline points="2 3 5 6 8 3" />
-        </svg>
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-          <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-        </svg>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{node.name}</span>
-      </button>
-      {!collapsed && node.children.map((child) =>
-        child.type === "dir" ? (
-          <DirNodeView key={child.relPath} node={child} depth={depth + 1} actions={actions} t={t} selected={selected} onToggleSelect={onToggleSelect} />
-        ) : (
-          <FileNodeView key={child.relPath} node={child} depth={depth + 1} actions={actions} t={t} selected={selected} onToggleSelect={onToggleSelect} />
-        ),
-      )}
-    </div>
-  );
-}
-
 function FileNodeView({
   node,
-  depth,
   actions,
   t,
   selected,
   onToggleSelect,
 }: {
   node: FileNode;
-  depth: number;
   actions: {
     onStage: (f: GitFileStatus) => void;
     onUnstage: (f: GitFileStatus) => void;
@@ -185,11 +90,13 @@ function FileNodeView({
   const [hovered, setHovered] = useState(false);
   const meta = STATUS_META[node.file.status];
   const isSelected = selected.has(node.file.filePath);
+  const slashIdx = node.relPath.lastIndexOf("/");
+  const dirSuffix = slashIdx === -1 ? "" : node.relPath.slice(0, slashIdx + 1);
   return (
     <div
       style={{
         display: "flex", alignItems: "center", gap: 2, height: 24,
-        padding: "0 6px", paddingLeft: 2 + depth * 12,
+        padding: "0 6px", paddingLeft: 8,
         cursor: "pointer", borderRadius: 4,
         background: isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
       }}
@@ -229,6 +136,7 @@ function FileNodeView({
       </span>
       <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, color: "var(--text)" }}>
         {node.name}
+        {dirSuffix && <span style={{ color: "var(--text-dim)", fontSize: 10 }}>  {dirSuffix}</span>}
       </span>
       <span style={{ display: "flex", gap: 2, opacity: hovered ? 1 : 0, transition: "opacity 0.1s", flexShrink: 0 }}>
         {actions.staged ? (
@@ -304,7 +212,20 @@ function FileGroup({
   onUnstageAllFiles: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
-  const tree = useMemo(() => buildTree(files, root), [files, root]);
+  // 扁平列表按（目录, 文件名）排序：同目录文件相邻、顺序稳定；\ 统一成 / 兼容 Windows
+  const sortedFiles = useMemo(() => {
+    const norm = (f: GitFileStatus) => relPath(f.filePath, root).replace(/\\/g, "/");
+    return [...files].sort((a, b) => {
+      const ra = norm(a);
+      const rb = norm(b);
+      const ia = ra.lastIndexOf("/");
+      const ib = rb.lastIndexOf("/");
+      const da = ia === -1 ? "" : ra.slice(0, ia);
+      const db = ib === -1 ? "" : rb.slice(0, ib);
+      if (da !== db) return da < db ? -1 : 1;
+      return ra.localeCompare(rb);
+    });
+  }, [files, root]);
   if (files.length === 0) return null;
   return (
     <div style={{ marginTop: 2 }}>
@@ -365,13 +286,21 @@ function FileGroup({
           </button>
         )}
       </div>
-      {!collapsed && tree.map((child) =>
-        child.type === "dir" ? (
-          <DirNodeView key={child.relPath} node={child} depth={0} actions={{ ...actions, staged }} t={t} selected={selected} onToggleSelect={onToggleSelect} />
-        ) : (
-          <FileNodeView key={child.relPath} node={child} depth={0} actions={{ ...actions, staged }} t={t} selected={selected} onToggleSelect={onToggleSelect} />
-        ),
-      )}
+      {!collapsed && sortedFiles.map((file) => {
+        const rel = relPath(file.filePath, root).replace(/\\/g, "/");
+        const slashIdx = rel.lastIndexOf("/");
+        const name = slashIdx === -1 ? rel : rel.slice(slashIdx + 1);
+        return (
+          <FileNodeView
+            key={file.filePath}
+            node={{ type: "file", name, relPath: rel, file }}
+            actions={{ ...actions, staged }}
+            t={t}
+            selected={selected}
+            onToggleSelect={onToggleSelect}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -387,8 +316,7 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
   const [feedback, setFeedback] = useState<string | null>(null);
   const [showBranches, setShowBranches] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");
-  const [gitLog, setGitLog] = useState<GitLogEntry[] | null>(null);
-  const [showLog, setShowLog] = useState(false);
+  const [activeTab, setActiveTab] = useState<"changes" | "history">("changes");
   const branchRef = useRef<HTMLDivElement>(null);
   const gitRequestRef = useRef(0);
 
@@ -604,32 +532,7 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
     if (result) setFeedback(t("scm.unstagedN", { count: files.length }));
   }, [runCommand, t]);
 
-  const toggleLog = useCallback(() => {
-    setShowLog((v) => !v);
-  }, []);
-
-  // 展开历史时按需加载（不在 setState updater 里发请求）
-  useEffect(() => {
-    if (showLog && gitLog === null && cwd) {
-      void fetchJson<GitLogEntry[]>(`/api/git/log?cwd=${encodeURIComponent(cwd)}`)
-        .then(setGitLog)
-        .catch(() => setGitLog([]));
-    }
-  }, [showLog, gitLog, cwd]);
-
   const root = status?.repositoryRoot ?? cwd ?? "";
-
-  const formatRelativeTime = (dateStr: string): string => {
-    const diff = Date.now() - new Date(dateStr).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return t("scm.justNow");
-    if (mins < 60) return t("scm.minutesAgo", { count: mins });
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return t("scm.hoursAgo", { count: hours });
-    const days = Math.floor(hours / 24);
-    if (days < 7) return t("scm.daysAgo", { count: days });
-    return new Date(dateStr).toLocaleDateString();
-  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
@@ -671,6 +574,40 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 12a9 9 0 1 1-2.64-6.36" /><polyline points="21 3 21 9 15 9" />
           </svg>
+        </button>
+      </div>
+
+      {/* Tab bar: changes / history */}
+      <div style={{ display: "flex", gap: 2, padding: "0 8px", flexShrink: 0, borderBottom: "1px solid var(--border)" }}>
+        <button
+          type="button"
+          onClick={() => setActiveTab("changes")}
+          style={{
+            position: "relative", height: 26, padding: "0 10px",
+            border: "none", background: "transparent", cursor: "pointer",
+            fontSize: 11, fontWeight: 650,
+            color: activeTab === "changes" ? "var(--text)" : "var(--text-muted)",
+          }}
+        >
+          {t("scm.tabChanges")}
+          {activeTab === "changes" && (
+            <span style={{ position: "absolute", left: 8, right: 8, bottom: -1, height: 2, background: "var(--accent)", borderRadius: 1 }} />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("history")}
+          style={{
+            position: "relative", height: 26, padding: "0 10px",
+            border: "none", background: "transparent", cursor: "pointer",
+            fontSize: 11, fontWeight: 650,
+            color: activeTab === "history" ? "var(--text)" : "var(--text-muted)",
+          }}
+        >
+          {t("scm.tabHistory")}
+          {activeTab === "history" && (
+            <span style={{ position: "absolute", left: 8, right: 8, bottom: -1, height: 2, background: "var(--accent)", borderRadius: 1 }} />
+          )}
         </button>
       </div>
 
@@ -834,9 +771,10 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
         </div>
       </div>
 
-      {/* Groups */}
-      <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0 }}>
-        {status?.isGitRepository && hasChanges && (
+      {/* Changes / History content */}
+      {activeTab === "changes" ? (
+        <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0 }}>
+          {status?.isGitRepository && hasChanges && (
           <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "2px 8px 6px", flexShrink: 0 }}>
             {selected.size > 0 ? (
               <>
@@ -939,39 +877,6 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
                 </button>
               </>
             )}
-            <button
-              type="button"
-              onClick={() => void toggleLog()}
-              title={t("scm.history")}
-              style={{
-                display: "flex", alignItems: "center", gap: 4,
-                height: 22, padding: "0 8px", border: "1px solid var(--border)", borderRadius: 5,
-                background: showLog ? "var(--bg-selected)" : "var(--bg)",
-                color: "var(--text-muted)", cursor: "pointer", fontSize: 10.5,
-              }}
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15 14" />
-              </svg>
-              {t("scm.history")}
-            </button>
-          </div>
-        )}
-        {showLog && status?.isGitRepository && (
-          <div style={{ borderBottom: "1px solid var(--border)", padding: "2px 4px 6px", flexShrink: 0 }}>
-            {gitLog === null ? (
-              <div style={{ padding: "6px 10px", fontSize: 11, color: "var(--text-dim)" }}>{t("scm.loading")}</div>
-            ) : gitLog.length === 0 ? (
-              <div style={{ padding: "6px 10px", fontSize: 11, color: "var(--text-dim)" }}>{t("scm.noCommits")}</div>
-            ) : (
-              gitLog.map((entry) => (
-                <div key={entry.hash} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 8px", borderRadius: 4, fontSize: 11, minWidth: 0 }}>
-                  <span style={{ flexShrink: 0, color: "var(--diff-rename)", fontFamily: "var(--font-mono)", fontSize: 10 }}>{entry.shortHash}</span>
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text)" }}>{entry.subject}</span>
-                  <span style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: 10 }}>{formatRelativeTime(entry.date)}</span>
-                </div>
-              ))
-            )}
           </div>
         )}
         {loading ? (
@@ -1034,9 +939,14 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
           </>
         )}
       </div>
+      ) : (
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <GitHistoryPanel cwd={cwd} />
+        </div>
+      )}
 
       {/* Commit box */}
-      {status?.isGitRepository && cwd && (
+      {activeTab === "changes" && status?.isGitRepository && cwd && (
         <div style={{ padding: "6px 8px", borderTop: "1px solid var(--border)", flexShrink: 0 }}>
           <textarea
             value={commitMsg}
