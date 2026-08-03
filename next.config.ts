@@ -10,6 +10,16 @@ try {
 } catch { /* package not found, use default */ }
 
 const nextConfig: NextConfig = {
+  output: process.env.NEXT_OUTPUT === "standalone" ? "standalone" : undefined,
+  // pi-coding-agent 运行时会动态加载这些非 JS 资源（theme json、导出模板、图片），
+  // standalone 的静态 trace 追踪不到，需要显式包含，否则桌面端报 ENOENT。
+  outputFileTracingIncludes: {
+    "/**": [
+      "./node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/*.json",
+      "./node_modules/@earendil-works/pi-coding-agent/dist/core/export-html/template.*",
+      "./node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/assets/*",
+    ],
+  },
   serverExternalPackages: [
     "undici",
     "@earendil-works/pi-coding-agent",

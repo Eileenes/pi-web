@@ -231,9 +231,12 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 
 ## 桌面端（Tauri，`src-tauri/`）
 
-- 壳模式：Rust 侧 `server.rs` spawn 打包进 Resources 的 Node 侧车运行 `bin/pi-web.js --port <port> --no-open`，健康检查通过后创建 Webview 窗口加载 `http://127.0.0.1:<port>`；退出时 kill 子进程（`ServerState` 保存 Child）。
-- `tauri dev` 直接加载 `http://127.0.0.1:30141`（需要 dev server 运行）；`npm run desktop:build` 走完整流程（`scripts/desktop-build.mjs`：next build → 打包产线依赖到 `src-tauri/resources/pi-web` → 下载 Node 22 到 `src-tauri/binaries/node-<triple>` → tauri build）。
+- 壳模式：Rust 侧 `server.rs` spawn 打包进 Resources 的 Node 运行时执行 `server.js`（Next standalone，env `PORT`/`HOSTNAME`），健康检查通过后创建 Webview 窗口加载 `http://127.0.0.1:<port>`；退出时按进程组 kill（node 以 `setsid` 启动，`kill(-pid)` 连 next 子进程一起清理，防孤儿）。
+- `tauri dev` 直接加载 `http://127.0.0.1:30141`（需要 dev server 运行）；`npm run desktop:build` 走完整流程（`scripts/desktop-build.mjs`：`NEXT_OUTPUT=standalone next build` → 打包 standalone 运行时到 `src-tauri/resources/pi-web` → 下载 Node 22 到 `src-tauri/resources/bin/node` → tauri build）。
+- **Node 运行时作为普通资源打包**（`Contents/Resources/resources/bin/node`），不是 `externalBin`——externalBin 会进 `Contents/MacOS/`，被 LaunchServices 识别成独立应用导致 Dock 出现多余 node 图标。
 - `tauri.conf.json` 配置了 `withGlobalTauri`，前端经 `lib/desktop.ts`（`isDesktop()` 守卫）调用 `window.__TAURI__.core.invoke`：`select_directory`（原生目录选择器）、`reveal_in_finder`、`notify`。浏览器环境全部安全降级。
+- **确认弹窗自绘**（`lib/confirm.ts` + `components/ConfirmDialog.tsx`）：Tauri 会拦截 `window.confirm` 并转发 dialog 插件，但需要前端 JS 包，没有时会报 `dialog.confirm not allowed`；自绘弹窗浏览器/桌面一致。
 - 外链（非 127.0.0.1 的 http/https）在 `on_navigation` 拦截交给系统浏览器。
 - 关闭窗口 → 隐藏到托盘（托盘菜单退出才真正退出）；单实例插件聚焦已有窗口；窗口状态持久化。
-- `src-tauri/binaries/`、`src-tauri/resources/`、`src-tauri/target/` 均 gitignored，CI 里由构建脚本生成。
+- 服务日志：`/tmp/piweb-desktop-server.log`（排查启动问题）。
+- `src-tauri/resources/`、`src-tauri/target/` 均 gitignored，CI 里由构建脚本生成。

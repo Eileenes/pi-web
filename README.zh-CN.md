@@ -124,12 +124,14 @@ npm run desktop:build
 
 构建脚本（`scripts/desktop-build.mjs`）会自动完成：
 
-1. `next build` — 前端生产构建
-2. 把运行时（`public`、`bin`、产线依赖 `node_modules`）打包进 `src-tauri/resources/pi-web/`
-3. 下载 Node 22 LTS 运行时，作为 Tauri 侧车进程放入 `src-tauri/binaries/node-<target-triple>`
+1. `next build` 以 **standalone 模式**运行（`NEXT_OUTPUT=standalone`）——Next 按服务端实际引用精确裁剪依赖，产出约 125MB 的精简运行时（而非全量依赖的 600MB+）
+2. 把 standalone 运行时（`server.js` + 裁剪后的 `node_modules` + `.next/static` + `public`）打包进 `src-tauri/resources/pi-web/`
+3. 下载 Node 22 LTS 运行时到 `src-tauri/resources/bin/node`（作为普通资源打包，不进入 `Contents/MacOS/`，因此不会在 Dock 出现第二个图标）
 4. 执行 `tauri build`
 
-产物在 `src-tauri/target/release/bundle/` 下：`Pi Web.app` 与 `Pi Web.dmg`。应用完全自包含（内置 Node 运行时 + pi-web 服务）。构建前请确保 30141 端口没有被开发服务器占用。
+产物在 `src-tauri/target/release/bundle/` 下：`Pi Web.app`（约 240MB）与 `Pi Web.dmg`（约 60MB）。应用完全自包含（内置 Node 运行时 + pi-web 服务，无需系统安装 Node）。构建前请确保 30141 端口没有被开发服务器占用。
+
+运行时，桌面壳会启动内置的 `node server.js`，默认端口 30141（被占用时自动换空闲端口），健康检查通过后才创建窗口。服务日志写在 `/tmp/piweb-desktop-server.log`，便于排查启动问题。
 
 ### src-tauri 目录结构
 
@@ -138,20 +140,22 @@ src-tauri/
   src/
     main.rs         # 入口
     lib.rs          # 应用初始化、插件、窗口事件、服务生命周期
-    server.rs       # 端口探测 → 启动内置 Node → 健康检查 → 创建窗口
+    server.rs       # 端口探测 → 启动内置 Node（server.js）→ 健康检查 → 创建窗口
     tray.rs         # 系统托盘菜单（显示/隐藏、新建会话、退出）
     commands.rs     # Tauri 命令：select_directory、reveal_in_finder、notify
-  tauri.conf.json   # 窗口、打包、externalBin（node 侧车）、资源
+  tauri.conf.json   # 窗口、打包、资源
   icons/            # 应用图标（由官方 pi logo 生成）
-  binaries/         # 内置 Node 运行时（gitignored，desktop:build 生成）
-  resources/pi-web/ # 打包后的 pi-web 运行时（gitignored，desktop:build 生成）
+  resources/
+    bin/node        # 内置 Node 运行时（gitignored，desktop:build 生成）
+    pi-web/         # Next standalone 运行时：server.js + 裁剪后的 node_modules（gitignored）
 ```
 
 ### 注意事项
 
 - 关闭窗口只是隐藏到托盘，服务仍在后台运行；从托盘菜单选择“退出”才会退出并停止服务。
 - 端口自动探测：默认 30141，被占用时自动改用空闲端口。
-- `src-tauri/binaries/`、`src-tauri/resources/`、`src-tauri/target/` 均在 gitignore 中，由构建脚本生成。
+- 内置 Node 运行时作为普通资源放在 `Contents/Resources/`（不是 `Contents/MacOS/` 的 externalBin sidecar），macOS 不会把它当成独立应用，Dock 不会出现多余的 node 图标。
+- `src-tauri/resources/` 与 `src-tauri/target/` 均在 gitignore 中，由构建脚本生成。
 
 ## 开发
 

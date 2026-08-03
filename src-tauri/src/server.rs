@@ -1,3 +1,4 @@
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -16,7 +17,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// pi-web 运行目录（构建时由 scripts/desktop-build.mjs 拷入 resources/pi-web）。
-/// 探测两种布局：Tauri 打包时资源相对 src-tauri 的路径会被保留。
+/// Next standalone 运行时：server.js + .next + 裁剪后的 node_modules。
 fn piweb_dir(app: &AppHandle) -> PathBuf {
     let res = app.path().resource_dir().expect("resource dir");
     let candidates = [
@@ -25,14 +26,26 @@ fn piweb_dir(app: &AppHandle) -> PathBuf {
     ];
     candidates
         .iter()
-        .find(|p| p.join(".next").exists())
+        .find(|p| p.join("server.js").exists())
         .cloned()
         .unwrap_or_else(|| res.join("pi-web"))
 }
 
-/// 打包进 Resources 的 node 侧车二进制（externalBin: binaries/node）。
+/// 打包进 bundle 的 node 运行时。作为普通资源打包（Contents/Resources/），
+/// 而不是 externalBin（那会进 Contents/MacOS/，被 LaunchServices 识别成独立
+/// 应用，在 Dock 显示多余的 node 图标）。
 fn node_bin(app: &AppHandle) -> PathBuf {
-    app.path().resource_dir().expect("resource dir").join("node")
+    let res = app.path().resource_dir().expect("resource dir");
+    let candidates = [
+        res.join("resources").join("bin").join("node"),
+        res.join("bin").join("node"),
+        res.join("node"),
+    ];
+    candidates
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .unwrap_or_else(|| res.join("resources").join("bin").join("node"))
 }
 
 fn is_port_free(port: u16) -> bool {
@@ -84,9 +97,9 @@ pub fn start(app: &AppHandle) -> Result<String, String> {
 
     let piweb = piweb_dir(app);
     let node = node_bin(app);
-    if !piweb.join(".next").exists() {
+    if !piweb.join("server.js").exists() {
         return Err(format!(
-            "pi-web build not found at {}. Run the desktop build script first.",
+            "pi-web standalone build not found at {}. Run the desktop build script first.",
             piweb.display()
         ));
     }
@@ -99,10 +112,22 @@ pub fn start(app: &AppHandle) -> Result<String, String> {
 
     let port = find_free_port();
     let mut cmd = Command::new(&node);
-    cmd.args(["bin/pi-web.js", "--port", &port.to_string(), "--no-open"])
+    cmd.args(["server.js"])
         .current_dir(&piweb)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .env("PORT", port.to_string())
+        .env("HOSTNAME", "127.0.0.1");
+    // 把 node 服务的输出落到日志文件，便于排查启动问题
+    if let Ok(log_file) = OpenOptions::new().create(true).append(true).open("/tmp/piweb-desktop-server.log") {
+        let out = log_file.try_clone().unwrap_or(log_file);
+        cmd.stdout(Stdio::from(out));
+        if let Ok(err_file) = OpenOptions::new().create(true).append(true).open("/tmp/piweb-desktop-server.log") {
+            cmd.stderr(Stdio::from(err_file));
+        } else {
+            cmd.stderr(Stdio::null());
+        }
+    } else {
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    }
     // Unix：让 node 成为新会话首领（setsid），这样 next 子进程在同一进程组，
     // 退出时按进程组 kill，避免 next 变孤儿继续占用端口。
     #[cfg(unix)]

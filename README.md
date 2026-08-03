@@ -128,12 +128,14 @@ npm run desktop:build
 
 The build script (`scripts/desktop-build.mjs`) does the following automatically:
 
-1. `next build` — production build of the web app
-2. Packs the runtime (`public`, `bin`, production-only `node_modules`) into `src-tauri/resources/pi-web/`
-3. Downloads the Node 22 LTS runtime and places it as the Tauri sidecar (`src-tauri/binaries/node-<target-triple>`)
+1. `next build` in **standalone mode** (`NEXT_OUTPUT=standalone`) — Next traces exactly what the server imports and produces a trimmed runtime (~125 MB instead of 600 MB+ of full dependencies)
+2. Packs the standalone runtime (`server.js` + trimmed `node_modules` + `.next/static` + `public`) into `src-tauri/resources/pi-web/`
+3. Downloads the Node 22 LTS runtime to `src-tauri/resources/bin/node` (packed as a plain resource so it stays out of `Contents/MacOS/` and never shows up as a second Dock icon)
 4. Runs `tauri build`
 
-Artifacts land in `src-tauri/target/release/bundle/` as `Pi Web.app` and `Pi Web.dmg`. The app is fully self-contained (bundled Node runtime + pi-web server). Make sure no dev server is running on port 30141 before building.
+Artifacts land in `src-tauri/target/release/bundle/` as `Pi Web.app` (≈ 240 MB) and `Pi Web.dmg` (≈ 60 MB). The app is fully self-contained (bundled Node runtime + pi-web server, no system Node needed). Make sure no dev server is running on port 30141 before building.
+
+At runtime the desktop shell spawns the bundled `node server.js` on port 30141 (falling back to a free port if occupied) and waits for a health check before opening the window. Server logs go to `/tmp/piweb-desktop-server.log` for troubleshooting.
 
 ### src-tauri layout
 
@@ -142,20 +144,22 @@ src-tauri/
   src/
     main.rs         # entry point
     lib.rs          # app setup, plugins, window events, server lifecycle
-    server.rs       # port probe → spawn bundled Node → health check → spawn window
+    server.rs       # port probe → spawn bundled Node (server.js) → health check → spawn window
     tray.rs         # system tray menu (toggle / new session / quit)
     commands.rs     # Tauri commands: select_directory, reveal_in_finder, notify
-  tauri.conf.json   # window, bundle, externalBin (node sidecar), resources
+  tauri.conf.json   # window, bundle, resources
   icons/            # app icons (generated from the official pi logo)
-  binaries/         # bundled Node runtime (gitignored, produced by desktop:build)
-  resources/pi-web/ # packed pi-web runtime (gitignored, produced by desktop:build)
+  resources/
+    bin/node        # bundled Node runtime (gitignored, produced by desktop:build)
+    pi-web/         # Next standalone runtime: server.js + trimmed node_modules (gitignored)
 ```
 
 ### Notes
 
 - Closing the window hides it to the tray; the server keeps running in the background. Choose **Quit** in the tray menu to exit and stop the server.
 - The port auto-detects: 30141 by default, and falls back to a free port if it is occupied.
-- `src-tauri/binaries/`, `src-tauri/resources/`, and `src-tauri/target/` are gitignored and produced by the build script.
+- The bundled Node runtime is shipped as a plain resource under `Contents/Resources/` (not an `externalBin` sidecar in `Contents/MacOS/`) so macOS does not treat it as a separate app and no extra Dock icon appears.
+- `src-tauri/resources/` and `src-tauri/target/` are gitignored and produced by the build script.
 
 ## Development
 

@@ -14,7 +14,7 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, copyFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, copyFileSync, chmodSync, readdirSync, statSync } from "node:fs";
 import { createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
@@ -25,7 +25,8 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SRC_TAURI = path.join(ROOT, "src-tauri");
 const RESOURCES_PIWEB = path.join(SRC_TAURI, "resources", "pi-web");
-const BINARIES_DIR = path.join(SRC_TAURI, "binaries");
+// node 运行时作为普通资源打包（放 Contents/Resources/，避免 Dock 出现多余图标）
+const BINARIES_DIR = path.join(SRC_TAURI, "resources", "bin");
 
 const NODE_VERSION = "v22.20.0";
 const NODE_DIST = process.env.PIWEB_NODE_MIRROR
@@ -103,7 +104,9 @@ async function downloadNodeRuntime() {
 
   mkdirSync(BINARIES_DIR, { recursive: true });
   const nodeBin = path.join(extractDir, "bin", "node");
-  const dest = path.join(BINARIES_DIR, `node-${triple}`);
+  // 放到 resources/ 下（作为普通资源随 bundle 打包）。不能放 externalBin
+  // （会进 Contents/MacOS/，被 LaunchServices 识别成独立应用，在 Dock 显示多余图标）。
+  const dest = path.join(BINARIES_DIR, "node");
   copyFileSync(nodeBin, dest);
   chmodSync(dest, 0o755);
   log(`Node runtime → ${dest}`);
@@ -115,22 +118,68 @@ async function download(url, dest) {
   await pipeline(Readable.fromWeb(response.body), createWriteStream(dest));
 }
 
+/**
+ * 递归查找 Next standalone 输出的 server.js（standalone 根目录会随
+ * outputFileTracingRoot 变化）。优先匹配当前层的 server.js，
+ * 避免先钻进 node_modules 深处匹配到无关的 server.js。
+ */
+function findStandaloneServer(dir) {
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return null;
+  }
+  // 第一遍：只匹配当前目录的 server.js
+  for (const entry of entries) {
+    if (entry === "server.js") return path.join(dir, entry);
+  }
+  // 第二遍：递归子目录
+  for (const entry of entries) {
+    const full = path.join(dir, entry);
+    let stat;
+    try {
+      stat = statSync(full);
+    } catch {
+      continue;
+    }
+    if (stat.isDirectory()) {
+      const found = findStandaloneServer(full);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 async function packPiWeb() {
   log("Packing pi-web runtime directory");
   rmSync(RESOURCES_PIWEB, { recursive: true, force: true });
   mkdirSync(RESOURCES_PIWEB, { recursive: true });
 
-  for (const item of [".next", "public", "bin", "package.json", "next.config.ts"]) {
-    const src = path.join(ROOT, item);
-    if (!existsSync(src)) {
-      console.error(`Missing build artifact: ${src}`);
-      process.exit(1);
-    }
-    execSync(`cp -R "${src}" "${RESOURCES_PIWEB}"`, { stdio: "inherit" });
+  // Next standalone 输出：server.js + 按引用裁剪的 node_modules（省掉 600MB+ 全量依赖）
+  const serverJs = findStandaloneServer(path.join(ROOT, ".next", "standalone"));
+  if (!serverJs) {
+    console.error("standalone server.js not found — did the build run with NEXT_OUTPUT=standalone?");
+    process.exit(1);
+  }
+  const standaloneRoot = path.dirname(serverJs);
+  log(`Standalone server: ${serverJs}`);
+
+  for (const entry of readdirSync(standaloneRoot)) {
+    execSync(`cp -R "${path.join(standaloneRoot, entry)}" "${RESOURCES_PIWEB}"`, { stdio: "inherit" });
   }
 
-  log("Installing production dependencies (this takes a while)");
-  run("npm", ["install", "--omit=dev", "--no-audit", "--no-fund", "--cache", path.join(tmpdir(), "npm-cache-piweb")], { cwd: RESOURCES_PIWEB });
+  // standalone 模式下 .next/static 需要手动复制（server.js 只带运行时目录）
+  const staticSrc = path.join(ROOT, ".next", "static");
+  if (existsSync(staticSrc)) {
+    mkdirSync(path.join(RESOURCES_PIWEB, ".next"), { recursive: true });
+    execSync(`cp -R "${staticSrc}" "${path.join(RESOURCES_PIWEB, ".next")}"`, { stdio: "inherit" });
+  }
+
+  // public 静态资源
+  if (existsSync(path.join(ROOT, "public"))) {
+    execSync(`cp -R "${path.join(ROOT, "public")}" "${RESOURCES_PIWEB}"`, { stdio: "inherit" });
+  }
 
   const size = execSync(`du -sh "${RESOURCES_PIWEB}"`, { encoding: "utf8" }).trim().split("\t")[0];
   log(`pi-web runtime packed (${size})`);
@@ -139,8 +188,8 @@ async function packPiWeb() {
 async function main() {
   checkDevServer();
 
-  log("1/4 Next.js production build");
-  run("npm", ["run", "build"]);
+  log("1/4 Next.js production build (standalone)");
+  run("npm", ["run", "build"], { env: { ...process.env, NEXT_OUTPUT: "standalone" } });
 
   await packPiWeb();
   await downloadNodeRuntime();
