@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
 import { SourceControlPanel } from "./SourceControlPanel";
+import { TerminalPanel } from "./TerminalPanel";
 import { ActivityBar, type ActivityBarView } from "./ActivityBar";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
@@ -80,6 +81,9 @@ export function AppShell() {
   const [projectTrustError, setProjectTrustError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarView, setSidebarView] = useState<"sessions" | "scm">("sessions");
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState(220);
+  const terminalResizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
   const [scmChangeCount, setScmChangeCount] = useState<number | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
@@ -440,10 +444,13 @@ export function AppShell() {
     router.replace("/", { scroll: false });
   }, [router, isMobile]);
 
+  const toggleTerminal = useCallback(() => setTerminalOpen((v) => !v), []);
+
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
   useGlobalKeyboardShortcuts({
     onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
     activeCwd,
+    onToggleTerminal: toggleTerminal,
   });
 
   // 桌面端托盘菜单“新建会话”事件 → 打开新会话流程
@@ -684,6 +691,31 @@ export function AppShell() {
     observer.observe(document.head, { childList: true, subtree: true, characterData: true });
     return () => observer.disconnect();
   }, [windowTitle]);
+
+  // 终端面板拖拽调整高度（支持鼠标 + 触屏）
+  const startTerminalResize = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    const startY = "touches" in e ? e.touches[0].clientY : e.clientY;
+    terminalResizeRef.current = { startY, startHeight: terminalHeight };
+    const onMove = (ev: MouseEvent | TouchEvent) => {
+      const ref = terminalResizeRef.current;
+      if (!ref) return;
+      const clientY = ev instanceof TouchEvent ? (ev.touches[0]?.clientY ?? ref.startY) : ev.clientY;
+      const next = Math.min(Math.max(ref.startHeight + (ref.startY - clientY), 100), 600);
+      setTerminalHeight(next);
+    };
+    const onUp = () => {
+      terminalResizeRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove, { passive: true });
+    window.addEventListener("touchend", onUp);
+    e.preventDefault();
+  }, [terminalHeight]);
 
   const sidebarContent = sidebarView === "scm" ? (
     <SourceControlPanel
@@ -970,6 +1002,29 @@ export function AppShell() {
               <circle cx="12" cy="7.5" r="1.2" fill="currentColor" stroke="none" />
               <circle cx="16.5" cy="10.5" r="1.2" fill="currentColor" stroke="none" />
             </svg>
+           </button>
+           <button
+             type="button"
+             onClick={toggleTerminal}
+             title={translate("terminal.toggleShortcut")}
+             aria-label={translate("terminal.title")}
+             aria-pressed={terminalOpen}
+             style={{
+               display: "flex", alignItems: "center", justifyContent: "center",
+               width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
+               background: terminalOpen ? "var(--bg-selected)" : "none",
+               border: "none", borderRight: "1px solid var(--border)",
+               color: terminalOpen ? "var(--text)" : "var(--text-muted)",
+               cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
+             }}
+             onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
+             onMouseLeave={(e) => {
+               e.currentTarget.style.color = terminalOpen ? "var(--text)" : "var(--text-muted)";
+             }}
+           >
+             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+               <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
+             </svg>
            </button>
            <button
              ref={languageBtnRef}
@@ -1723,6 +1778,19 @@ export function AppShell() {
               </div>
             )
           ) : null}
+        </div>
+
+        {/* Terminal panel — collapsible bottom panel (VSCode-style)。始终挂载，关闭时 display:none 保留会话 */}
+        <div
+          onMouseDown={startTerminalResize}
+          style={{ height: 4, flexShrink: 0, cursor: "row-resize", background: "transparent", touchAction: "none", display: terminalOpen ? "block" : "none" }}
+        />
+        <div style={{ height: terminalHeight, flexShrink: 0, minHeight: 0, display: terminalOpen ? "flex" : "none", flexDirection: "column" }}>
+          <TerminalPanel
+            initialCwd={selectedSession?.cwd ?? effectiveNewSessionCwd ?? activeCwd ?? null}
+            onClose={() => setTerminalOpen(false)}
+            open={terminalOpen}
+          />
         </div>
       </div>
 
