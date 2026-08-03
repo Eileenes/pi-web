@@ -12,6 +12,7 @@ import {
 } from "@/lib/file-paths";
 import type { GitFileStatus, GitFileStatusKind, GitStatusResponse } from "@/lib/git-types";
 import { useI18n } from "@/hooks/useI18n";
+import { confirmDialog } from "@/lib/confirm";
 type Translate = ReturnType<typeof useI18n>["t"];
 
 interface FileEntry {
@@ -815,8 +816,8 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     void runGitCommand("unstage", {}, [f.filePath]);
   }, [runGitCommand]);
 
-  const handleDiscardFile = useCallback((f: GitFileStatus) => {
-    if (!window.confirm(t("scm.discardConfirm", { file: getFileName(f.filePath) }))) return;
+  const handleDiscardFile = useCallback(async (f: GitFileStatus) => {
+    if (!(await confirmDialog(t("scm.discardConfirm", { file: getFileName(f.filePath) })))) return;
     void runGitCommand("discard", { untracked: f.status === "untracked" }, [f.filePath]);
   }, [runGitCommand, t]);
 
@@ -825,7 +826,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     if (!msg) return;
     // 暂存区为空但有更改：提示自动暂存全部再提交
     if (stagedCount === 0 && gitFiles.length > 0) {
-      if (!window.confirm(t("scm.stageAllAndCommitConfirm"))) return;
+      if (!(await confirmDialog(t("scm.stageAllAndCommitConfirm")))) return;
       const staged = await runGitCommand("stage", {}, []);
       if (!staged) return;
     }

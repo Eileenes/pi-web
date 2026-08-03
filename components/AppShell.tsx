@@ -12,6 +12,7 @@ import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
+import { ConfirmDialogHost } from "./ConfirmDialog";
 import { BranchNavigator } from "./BranchNavigator";
 import { useTheme } from "@/hooks/useTheme";
 import { isDesktop } from "@/lib/desktop";
@@ -743,6 +744,7 @@ export function AppShell() {
 
   return (
     <>
+    <ConfirmDialogHost />
     <style>{`
       @keyframes session-info-pop {
         0% {

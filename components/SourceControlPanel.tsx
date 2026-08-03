@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GitBranchInfo, GitFileStatus, GitLogEntry, GitStatusResponse } from "@/lib/git-types";
 import { useI18n } from "@/hooks/useI18n";
+import { confirmDialog } from "@/lib/confirm";
 
 interface Props {
   cwd: string | null;
@@ -464,9 +465,9 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
     void runCommand("unstage", {}, [f.filePath]);
   }, [runCommand]);
 
-  const handleDiscard = useCallback((f: GitFileStatus) => {
+  const handleDiscard = useCallback(async (f: GitFileStatus) => {
     const label = relPath(f.filePath, status?.repositoryRoot ?? cwd ?? "");
-    const ok = window.confirm(t("scm.discardConfirm", { file: label }));
+    const ok = await confirmDialog(t("scm.discardConfirm", { file: label }));
     if (!ok) return;
     void runCommand("discard", { untracked: f.status === "untracked" }, [f.filePath]);
   }, [runCommand, status, cwd, t]);
@@ -485,7 +486,7 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
     if (!msg) return;
     // 暂存区为空但有更改：提示自动暂存全部再提交
     if (groups.staged.length === 0 && hasChanges) {
-      if (!window.confirm(t("scm.stageAllAndCommitConfirm"))) return;
+      if (!(await confirmDialog(t("scm.stageAllAndCommitConfirm")))) return;
       const staged = await runCommand("stage", {}, []);
       if (!staged) return;
     }
@@ -513,7 +514,7 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
   }, [runCommand]);
 
   const handleDeleteBranch = useCallback(async (name: string) => {
-    if (!window.confirm(t("scm.deleteBranchConfirm", { branch: name }))) return;
+    if (!(await confirmDialog(t("scm.deleteBranchConfirm", { branch: name })))) return;
     const result = await runCommand("deleteBranch", { branch: name });
     if (result) setFeedback(t("scm.branchDeleted", { branch: name }));
   }, [runCommand, t]);
@@ -524,7 +525,7 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
   }, [runCommand, t]);
 
   const handleDiscardAll = useCallback(async () => {
-    if (!window.confirm(t("scm.discardAllConfirm"))) return;
+    if (!(await confirmDialog(t("scm.discardAllConfirm")))) return;
     const result = await runCommand("discard", {}, []);
     if (result) setFeedback(t("scm.discardedAll"));
   }, [runCommand, t]);
@@ -584,7 +585,7 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
 
   const batchDiscard = useCallback(async () => {
     if (selectedFiles.length === 0) return;
-    if (!window.confirm(t("scm.discardNConfirm", { count: selectedFiles.length }))) return;
+    if (!(await confirmDialog(t("scm.discardNConfirm", { count: selectedFiles.length })))) return;
     const tracked = selectedFiles.filter((f) => f.status !== "untracked").map((f) => f.filePath);
     const untracked = selectedFiles.filter((f) => f.status === "untracked").map((f) => f.filePath);
     if (tracked.length > 0) await runCommand("discard", {}, tracked);
