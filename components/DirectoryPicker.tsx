@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
+import { isDesktop, selectDirectoryDesktop } from "@/lib/desktop";
 
 interface DirectoryEntry {
   name: string;
@@ -163,6 +164,24 @@ export function DirectoryPicker({ onCancel, onSelect, busy = false, error }: Pro
           >
             {t("directoryPicker.go")}
           </button>
+          {isDesktop() && (
+            <button
+              className="directory-picker-action"
+              type="button"
+              disabled={busy}
+              title={t("directoryPicker.systemPicker")}
+              style={{ minWidth: 58, height: 36, padding: "0 12px", display: "flex", alignItems: "center", justifyContent: "center", gap: 5, border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg)", color: "var(--accent)", cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
+              onClick={async () => {
+                const picked = await selectDirectoryDesktop();
+                if (picked) onSelect(picked);
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+                <path d="M1.5 3h4l1.5 2h7.5v7.5h-13z" />
+              </svg>
+              {t("directoryPicker.systemPickerShort")}
+            </button>
+          )}
         </form>
 
         <div className="directory-picker-list" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "8px 10px" }}>
@@ -205,7 +224,7 @@ export function DirectoryPicker({ onCancel, onSelect, busy = false, error }: Pro
           ) : (
             <div style={{ padding: 8, color: "var(--text-dim)", fontSize: 11 }}>{t("directoryPicker.noSubdirectories")}</div>
           )}
-          {(loadError || error) && <div style={{ padding: "8px", color: "#dc2626", fontSize: 11 }}>{loadError ?? error}</div>}
+          {(loadError || error) && <div style={{ padding: "8px", color: "var(--danger)", fontSize: 11 }}>{loadError ?? error}</div>}
         </div>
 
         <div className="directory-picker-footer" style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, flexShrink: 0, padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
@@ -216,7 +235,7 @@ export function DirectoryPicker({ onCancel, onSelect, busy = false, error }: Pro
             onClick={() => onSelect(currentPath)}
             disabled={!canSelect}
             title={hasUncommittedPath ? t("directoryPicker.openBeforeSelecting") : t("directoryPicker.selectCurrentDirectory")}
-            style={{ padding: "6px 16px", border: 0, borderRadius: 6, background: "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 600, opacity: canSelect ? 1 : 0.6, cursor: canSelect ? "pointer" : "default" }}
+            style={{ padding: "6px 16px", border: 0, borderRadius: 6, background: "var(--accent)", color: "var(--on-accent)", fontSize: 13, fontWeight: 600, opacity: canSelect ? 1 : 0.6, cursor: canSelect ? "pointer" : "default" }}
           >
             {busy ? t("i18n.checking") : t("directoryPicker.selectThisFolder")}
           </button>

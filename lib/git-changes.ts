@@ -166,26 +166,29 @@ async function createTrackedFilePatch(
   repositoryRoot: string,
   relativePath: string,
   originalPath?: string,
+  cached = false,
 ): Promise<string | null> {
   const paths = originalPath && originalPath !== relativePath
     ? [originalPath, relativePath]
     : [relativePath];
+  const args = [
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--unified=3",
+    ...(cached ? ["--cached"] : []),
+    "HEAD",
+    "--",
+    ...paths,
+  ];
   try {
-    return await git(repositoryRoot, [
-      "diff",
-      "--no-color",
-      "--no-ext-diff",
-      "--unified=3",
-      "HEAD",
-      "--",
-      ...paths,
-    ], TEXT_PREVIEW_MAX_BYTES * 4);
+    return await git(repositoryRoot, args, TEXT_PREVIEW_MAX_BYTES * 4);
   } catch {
     return null;
   }
 }
 
-export async function getGitFileDiff(cwd: string, filePath: string): Promise<GitFileDiffResponse> {
+export async function getGitFileDiff(cwd: string, filePath: string, cached = false): Promise<GitFileDiffResponse> {
   const repositoryRoot = await findRepositoryRoot(cwd);
   if (!repositoryRoot || !isWithinPath(repositoryRoot, filePath)) return { supported: false };
 
@@ -196,8 +199,21 @@ export async function getGitFileDiff(cwd: string, filePath: string): Promise<Git
   if (!entry) return { supported: false };
 
   const { status } = classifyGitStatus(entry);
+
+  // 已暂存视图只对暂存区有内容的文件有意义（untracked 永远无法 staged diff）
+  if (cached && (status === "untracked" || entry.indexStatus === " " || entry.indexStatus === "?")) {
+    return { supported: false };
+  }
+
   if (status === "deleted") {
-    const patch = await createTrackedFilePatch(repositoryRoot, relativePath, entry.originalPath);
+    const patch = await createTrackedFilePatch(repositoryRoot, relativePath, entry.originalPath, cached);
+    if (!patch?.includes("\n@@ ")) return { supported: false };
+    return { supported: true, status, patch };
+  }
+
+  // cached 视图直接对比索引与 HEAD，不需要读工作区文件内容
+  if (cached) {
+    const patch = await createTrackedFilePatch(repositoryRoot, relativePath, entry.originalPath, true);
     if (!patch?.includes("\n@@ ")) return { supported: false };
     return { supported: true, status, patch };
   }

@@ -10,6 +10,7 @@ import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { ExtensionStatusBar } from "./ExtensionStatusBar";
 import { useI18n } from "@/hooks/useI18n";
+import { isDesktop, notifyDesktop } from "@/lib/desktop";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
@@ -188,8 +189,11 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     if (soundEnabledRef.current) {
       playDoneSoundRef.current();
     }
+    if (isDesktop()) {
+      void notifyDesktop(t("notify.agentDoneTitle"), t("notify.agentDoneBody"));
+    }
     onAgentEnd?.();
-  }, [onAgentEnd]);
+  }, [onAgentEnd, t]);
 
   // 稳定化 onEditContent 引用，配合 React.memo 防止历史消息重渲染
   const handleEditContent = useCallback((content: string) => {

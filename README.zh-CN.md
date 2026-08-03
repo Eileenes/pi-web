@@ -85,6 +85,74 @@ npx @agegr/pi-web@latest
 - **Git worktree**：什么时候显示切换器、新建目录在哪里、删除会影响什么，见 [Pi Web 里的 Worktree](./docs/worktrees.zh-CN.md)。
 - **Fork 与会话内分支不同**：Fork 会创建新的 `.jsonl` 文件；“Edit from here” 是同一会话文件里的分支。
 
+## 桌面应用（Tauri）
+
+Pi Web 同时提供基于 [Tauri](https://v2.tauri.app/) 的原生桌面壳（`src-tauri/`）。壳会用内置的 Node.js 22 运行时（无需系统安装 Node）启动 pi-web 服务，并在原生窗口中渲染同一套界面，同时提供桌面端集成能力：
+
+- **系统托盘**：显示/隐藏窗口、新建会话、退出（关闭窗口只会隐藏到托盘——从托盘菜单选择“退出”才会真正退出并停止服务）。
+- **原生目录选择器**：目录选择器提供“系统”按钮，直接弹出操作系统文件夹选择框。
+- **在 Finder/资源管理器中显示**：文件查看器工具栏可定位文件所在目录。
+- **系统通知**：Agent 完成任务时弹出系统级通知。
+- **外部链接走系统浏览器**：指向本机服务以外的 http(s) 链接会自动交给默认浏览器打开。
+- **单实例与窗口记忆**：再次启动会聚焦已有窗口，窗口大小/位置会被记住。
+- **官方 pi 图标**：应用图标为 [pi.dev](https://pi.dev) 的官方 logo。
+
+其余一切——皮肤/主题、源代码管理（SCM）、模型配置、会话——与网页版完全一致。
+
+### 环境要求
+
+- Node.js 22.19.0+（构建时需要）
+- Rust 工具链（`cargo`、`rustc` 1.77+）
+- macOS：需要 Xcode Command Line Tools（`xcode-select --install`）用于编译
+- 能访问 crates.io（国内网络建议配置 [Rust 镜像](https://rsproxy.cn/)）
+
+### 开发模式
+
+分两个终端运行 Next.js 开发服务器和桌面壳：
+
+```bash
+npm install
+npm run dev          # 终端 1：Next.js 开发服务器，http://127.0.0.1:30141
+npm run tauri dev    # 终端 2：桌面壳（加载上面的开发服务器）
+```
+
+### 打包可分发的应用（macOS）
+
+```bash
+npm run desktop:build
+```
+
+构建脚本（`scripts/desktop-build.mjs`）会自动完成：
+
+1. `next build` — 前端生产构建
+2. 把运行时（`public`、`bin`、产线依赖 `node_modules`）打包进 `src-tauri/resources/pi-web/`
+3. 下载 Node 22 LTS 运行时，作为 Tauri 侧车进程放入 `src-tauri/binaries/node-<target-triple>`
+4. 执行 `tauri build`
+
+产物在 `src-tauri/target/release/bundle/` 下：`Pi Web.app` 与 `Pi Web.dmg`。应用完全自包含（内置 Node 运行时 + pi-web 服务）。构建前请确保 30141 端口没有被开发服务器占用。
+
+### src-tauri 目录结构
+
+```text
+src-tauri/
+  src/
+    main.rs         # 入口
+    lib.rs          # 应用初始化、插件、窗口事件、服务生命周期
+    server.rs       # 端口探测 → 启动内置 Node → 健康检查 → 创建窗口
+    tray.rs         # 系统托盘菜单（显示/隐藏、新建会话、退出）
+    commands.rs     # Tauri 命令：select_directory、reveal_in_finder、notify
+  tauri.conf.json   # 窗口、打包、externalBin（node 侧车）、资源
+  icons/            # 应用图标（由官方 pi logo 生成）
+  binaries/         # 内置 Node 运行时（gitignored，desktop:build 生成）
+  resources/pi-web/ # 打包后的 pi-web 运行时（gitignored，desktop:build 生成）
+```
+
+### 注意事项
+
+- 关闭窗口只是隐藏到托盘，服务仍在后台运行；从托盘菜单选择“退出”才会退出并停止服务。
+- 端口自动探测：默认 30141，被占用时自动改用空闲端口。
+- `src-tauri/binaries/`、`src-tauri/resources/`、`src-tauri/target/` 均在 gitignore 中，由构建脚本生成。
+
 ## 开发
 
 ```bash

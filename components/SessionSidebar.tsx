@@ -413,7 +413,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [explorerKey, setExplorerKey] = useState(0);
   const [explorerUploadBusy, setExplorerUploadBusy] = useState(false);
   const [changesCount, setChangesCount] = useState(0);
-  const [changesCollapsed, setChangesCollapsed] = useState(true);
+  const [changesCollapsed] = useState(false);
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
@@ -1586,21 +1586,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               {t("files.explorer")}
             </button>
             {explorerOpen && changesCount > 0 && (
-              <ToolbarIconButton
-                onClick={() => setChangesCollapsed((v) => !v)}
-                title={t("sidebar.changedFiles", { count: changesCount })}
-                ariaPressed={!changesCollapsed}
-                color={changesCollapsed ? "var(--text-dim)" : "var(--accent)"}
-                background={changesCollapsed ? "none" : "var(--bg-selected)"}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M3 12h6" />
-                  <path d="M15 12h6" />
-                </svg>
-              </ToolbarIconButton>
-            )}
-            {explorerOpen && (
               <ToolbarIconButton
                 onClick={() => fileExplorerRef.current?.openUploadPicker()}
                 disabled={explorerUploadBusy}
