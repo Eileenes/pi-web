@@ -66,7 +66,7 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{ __html: getSkinBootstrapScript() }}
         />
       </head>
-      <body translate="no" className="notranslate">
+      <body translate="no" className="notranslate" suppressHydrationWarning>
         {children}
         <PwaRegistration />
       </body>

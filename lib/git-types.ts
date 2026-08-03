@@ -39,7 +39,31 @@ export interface GitLogEntry {
   shortHash: string;
   subject: string;
   author: string;
+  authorEmail: string;
   date: string;
+  /** %D 装饰信息，如 ["HEAD -> feat/x", "origin/main", "tag: v1.0"] */
+  refs: string[];
+}
+
+export interface GitCommitFileChange {
+  path: string;
+  status: "added" | "deleted" | "modified" | "renamed" | "copied";
+  additions: number;
+  deletions: number;
+}
+
+export interface GitCommitDetail {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  body: string;
+  author: string;
+  authorEmail: string;
+  authorDate: string;
+  committerDate: string;
+  parents: string[];
+  refs: string[];
+  files: GitCommitFileChange[];
 }
 
 export type GitCommandAction =

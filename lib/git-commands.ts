@@ -1,6 +1,6 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
-import type { GitBranchInfo, GitLogEntry } from "./git-types";
+import type { GitBranchInfo, GitCommitDetail, GitCommitFileChange, GitLogEntry } from "./git-types";
 
 const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 30_000;
@@ -104,17 +104,122 @@ export async function getGitBranches(cwd: string): Promise<GitBranchInfo> {
   };
 }
 
-export async function getGitLog(cwd: string, count = 20): Promise<GitLogEntry[]> {
-  const result = await runGit(cwd, [
-    "log",
-    "--no-color",
-    `-n ${count}`,
-    "--format=%H%x00%h%x00%s%x00%an%x00%ad",
+export interface GitLogOptions {
+  count?: number;
+  offset?: number;
+  /** 是否包含所有分支的提交（git log --all） */
+  all?: boolean;
+}
+
+/** 解析 git %D 装饰字段，如 "HEAD -> feat/x, origin/main, tag: v1.0" */
+function parseRefs(decorations: string): string[] {
+  return decorations
+    .split(",")
+    .map((d) => d.trim())
+    .filter(Boolean);
+}
+
+export async function getGitLog(cwd: string, options: GitLogOptions = {}): Promise<GitLogEntry[]> {
+  const { count = 50, offset = 0, all = false } = options;
+  const args = ["log", "--no-color"];
+  if (all) args.push("--all");
+  args.push(
+    "-n", String(count),
+    ...(offset > 0 ? ["--skip", String(offset)] : []),
+    "--format=%H%x00%h%x00%s%x00%an%x00%ae%x00%ad%x00%D",
     "--date=iso-strict",
-  ]);
+  );
+  const result = await runGit(cwd, args);
   if (!result.ok) return [];
   return result.stdout.split("\n").filter(Boolean).map((line) => {
-    const [hash, shortHash, subject, author, date] = line.split("\0");
-    return { hash, shortHash, subject, author, date };
+    const [hash, shortHash, subject, author, authorEmail, date, refsField] = line.split("\0");
+    return {
+      hash,
+      shortHash,
+      subject,
+      author,
+      authorEmail: authorEmail ?? "",
+      date,
+      refs: parseRefs(refsField ?? ""),
+    };
   });
+}
+
+const NAME_STATUS_STATUS: Record<string, GitCommitFileChange["status"]> = {
+  A: "added",
+  M: "modified",
+  D: "deleted",
+  R: "renamed",
+  C: "copied",
+};
+
+/** 解析 git numstat 输出（一行：<add>\t<del>\t<path>），重命名路径取 new 部分 */
+function parseNumstat(stdout: string): Map<string, { additions: number; deletions: number }> {
+  const stats = new Map<string, { additions: number; deletions: number }>();
+  for (const line of stdout.split("\n")) {
+    const m = line.match(/^(\d+|-)\t(\d+|-)\t(.+)$/);
+    if (!m) continue;
+    let path = m[3];
+    // numstat 的重命名路径形如 "src/{b.ts => c.ts}"，取 => 后的新路径
+    path = path.replace(/\{[^}]*=>\s*([^}]*)\}/, "$1");
+    const arrow = path.indexOf(" => ");
+    if (arrow !== -1) path = path.slice(arrow + 4);
+    stats.set(path, {
+      additions: m[1] === "-" ? 0 : Number(m[1]),
+      deletions: m[2] === "-" ? 0 : Number(m[2]),
+    });
+  }
+  return stats;
+}
+
+export async function getGitCommitDetail(cwd: string, hash: string): Promise<GitCommitDetail | null> {
+  const meta = await runGit(cwd, [
+    "show", "-s", "--no-color", hash,
+    "--format=%H%x00%h%x00%s%x00%b%x00%an%x00%ae%x00%ad%x00%cd%x00%P%x00%D",
+    "--date=iso-strict",
+  ]);
+  if (!meta.ok || !meta.stdout) return null;
+  const [fullHash, shortHash, subject, body, author, authorEmail, authorDate, committerDate, parentsField, refsField] = meta.stdout.split("\0");
+  if (!fullHash) return null;
+
+  // 文件变更：name-status 给状态，numstat 给行数
+  const [nameStatus, numstat] = await Promise.all([
+    runGit(cwd, ["show", "--no-color", "--format=", "--name-status", hash]),
+    runGit(cwd, ["show", "--no-color", "--format=", "--numstat", hash]),
+  ]);
+  const stats = parseNumstat(numstat.stdout);
+  const files: GitCommitFileChange[] = [];
+  for (const line of nameStatus.stdout.split("\n")) {
+    const m = line.match(/^([A-Z]\d*)\t(.*)$/);
+    if (!m) continue;
+    const statusLetter = m[1][0];
+    const status = NAME_STATUS_STATUS[statusLetter];
+    if (!status) continue;
+    // R/C 输出 old\tnew 两个路径，取最后一个（新路径）
+    const parts = m[2].split("\t");
+    const path = parts[parts.length - 1];
+    const st = stats.get(path) ?? { additions: 0, deletions: 0 };
+    files.push({ path, status, ...st });
+  }
+
+  return {
+    hash: fullHash,
+    shortHash,
+    subject: subject ?? "",
+    body: body?.trim() ?? "",
+    author: author ?? "",
+    authorEmail: authorEmail ?? "",
+    authorDate,
+    committerDate,
+    parents: (parentsField ?? "").split(" ").filter(Boolean),
+    refs: parseRefs(refsField ?? ""),
+    files,
+  };
+}
+
+/** 某次提交中单个文件的 unified diff（git show <hash> -- <path>） */
+export async function getGitCommitFilePatch(cwd: string, hash: string, relPath: string): Promise<string> {
+  // :(literal) 前缀关闭 git pathspec 的 glob/magic 解析，避免文件名含 * ? [ ] 时匹配到错误文件
+  const result = await runGit(cwd, ["show", "--no-color", "--format=", hash, "--", `:(literal)${relPath}`]);
+  return result.ok ? result.stdout : "";
 }

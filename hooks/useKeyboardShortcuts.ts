@@ -25,6 +25,8 @@ interface UseGlobalKeyboardShortcutsOptions {
   onNewSession?: (cwd: string) => void;
   /** The currently selected project directory (sidebar cwd). */
   activeCwd?: string | null;
+  /** Called when Ctrl+` is pressed (toggle terminal panel). */
+  onToggleTerminal?: () => void;
 }
 
 /**
@@ -42,7 +44,7 @@ interface UseGlobalKeyboardShortcutsOptions {
 export function useGlobalKeyboardShortcuts(
   options: UseGlobalKeyboardShortcutsOptions,
 ): void {
-  const { onNewSession, activeCwd } = options;
+  const { onNewSession, activeCwd, onToggleTerminal } = options;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -64,10 +66,18 @@ export function useGlobalKeyboardShortcuts(
         if (!activeCwd || !onNewSession) return;
         e.preventDefault();
         onNewSession(activeCwd);
+        return;
+      }
+
+      // ---- Ctrl+`: toggle terminal panel ----
+      if (e.key === "`" && e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+        if (!onToggleTerminal) return;
+        e.preventDefault();
+        onToggleTerminal();
       }
     };
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCwd, onNewSession]);
+  }, [activeCwd, onNewSession, onToggleTerminal]);
 }

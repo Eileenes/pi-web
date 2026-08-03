@@ -1,13 +1,17 @@
 import fs from "fs";
 import { NextRequest, NextResponse } from "next/server";
 import { getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed, isWindowsAbsolutePath } from "@/lib/file-access";
-import { getGitLog } from "@/lib/git-commands";
+import { getGitCommitDetail } from "@/lib/git-commands";
 
 export async function GET(request: NextRequest) {
   try {
     const cwd = request.nextUrl.searchParams.get("cwd")?.trim() ?? "";
+    const hash = request.nextUrl.searchParams.get("hash")?.trim() ?? "";
     if (!cwd || (!cwd.startsWith("/") && !isWindowsAbsolutePath(cwd))) {
       return NextResponse.json({ error: "cwd must be an absolute path" }, { status: 400 });
+    }
+    if (!/^[0-9a-fA-F]{4,40}$/.test(hash)) {
+      return NextResponse.json({ error: "Invalid hash" }, { status: 400 });
     }
     const allowedRoots = await getAllowedFileRoots();
     if (!isFilePathAllowed(cwd, allowedRoots)) {
@@ -23,12 +27,9 @@ export async function GET(request: NextRequest) {
     if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
-    const countParam = request.nextUrl.searchParams.get("count");
-    const offsetParam = request.nextUrl.searchParams.get("offset");
-    const count = countParam ? Math.max(1, Math.min(200, Number(countParam) || 50)) : 50;
-    const offset = offsetParam ? Math.max(0, Number(offsetParam) || 0) : 0;
-    const all = request.nextUrl.searchParams.get("all") === "1";
-    return NextResponse.json(await getGitLog(cwd, { count, offset, all }));
+    const detail = await getGitCommitDetail(cwd, hash);
+    if (!detail) return NextResponse.json({ error: "Commit not found" }, { status: 404 });
+    return NextResponse.json(detail);
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
