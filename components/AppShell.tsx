@@ -627,6 +627,7 @@ export function AppShell() {
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
+  const projectCwd = selectedSession?.cwd ?? effectiveNewSessionCwd ?? activeCwd ?? null;
   const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
   const projectTrustCwd = selectedSession?.cwd ?? effectiveNewSessionCwd;
   // While restoring initial session from URL, don't show the placeholder
@@ -1787,7 +1788,8 @@ export function AppShell() {
         />
         <div style={{ height: terminalHeight, flexShrink: 0, minHeight: 0, display: terminalOpen ? "flex" : "none", flexDirection: "column" }}>
           <TerminalPanel
-            initialCwd={selectedSession?.cwd ?? effectiveNewSessionCwd ?? activeCwd ?? null}
+            initialCwd={projectCwd}
+            projectCwd={projectCwd}
             onClose={() => setTerminalOpen(false)}
             open={terminalOpen}
           />

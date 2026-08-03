@@ -6,6 +6,8 @@ import { useI18n } from "@/hooks/useI18n";
 
 interface Props {
   initialCwd: string | null;
+  /** 当前项目目录（实时），第一个终端跟随它切换 cwd，直到用户手动 cd */
+  projectCwd: string | null;
   onClose: () => void;
   /** 面板是否可见（打开时聚焦活动终端的输入框） */
   open?: boolean;
@@ -53,6 +55,10 @@ export interface TerminalSessionHandle {
 
 interface TerminalSessionProps {
   initialCwd: string | null;
+  /** 项目目录变化时是否跟随（tab0 跟随直到手动 cd；拆分终端不跟随） */
+  followProject?: boolean;
+  /** 当前项目目录（实时，跟随用） */
+  projectCwd: string | null;
   /** 运行状态变化（用于容器显示全局停止按钮） */
   onRunningChange: (running: boolean) => void;
   /** cwd 变化（用于新建终端时继承当前目录） */
@@ -60,7 +66,7 @@ interface TerminalSessionProps {
 }
 
 const TerminalSession = memo(forwardRef<TerminalSessionHandle, TerminalSessionProps>(function TerminalSession(
-  { initialCwd, onRunningChange, onCwdChange },
+  { initialCwd, followProject = false, projectCwd, onRunningChange, onCwdChange },
   ref,
 ) {
   const { t } = useI18n();
@@ -70,6 +76,8 @@ const TerminalSession = memo(forwardRef<TerminalSessionHandle, TerminalSessionPr
   const [history, setHistory] = useState<string[]>([]);
   const historyIdxRef = useRef(-1);
   const [running, setRunning] = useState(false);
+  // 未手动 cd 前跟随项目目录切换（tab0 默认开启）
+  const followProjectRef = useRef(followProject);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -105,15 +113,26 @@ const TerminalSession = memo(forwardRef<TerminalSessionHandle, TerminalSessionPr
     focus: () => inputRef.current?.focus(),
   }), []);
 
-  // 预取 home 目录（cd ~ 用）
+  // 预取 home 目录（cd ~ 用）；若启动时未选项目导致 cwd 为空，回退到主目录
   useEffect(() => {
     fetch("/api/home")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        homeDirRef.current = typeof d?.home === "string" ? d.home : null;
+        const home = typeof d?.home === "string" ? d.home : null;
+        homeDirRef.current = home;
+        if (home) {
+          setCwd((cur) => cur || home); // 仅当 cwd 仍为空时回退，不覆盖用户手动 cd
+        }
       })
       .catch(() => {});
   }, []);
+
+  // 跟随项目目录：项目切换且尚未手动 cd 时更新 cwd
+  useEffect(() => {
+    if (followProjectRef.current && projectCwd) {
+      setCwd(projectCwd);
+    }
+  }, [projectCwd]);
 
   // 新输出时自动滚到底部（仅当用户停留在底部时）
   useEffect(() => {
@@ -183,6 +202,7 @@ const TerminalSession = memo(forwardRef<TerminalSessionHandle, TerminalSessionPr
         if (prev && prev !== cwd) {
           prevCwdRef.current = cwd;
           setCwd(prev);
+          followProjectRef.current = false; // 手动定位后不再跟随项目
           appendLines({ type: "output", text: t("terminal.cdTo", { path: prev }) });
         } else {
           appendLines({ type: "output", text: t("terminal.cdOlderPwd") });
@@ -193,6 +213,7 @@ const TerminalSession = memo(forwardRef<TerminalSessionHandle, TerminalSessionPr
       if (resolved) {
         prevCwdRef.current = cwd;
         setCwd(resolved);
+        followProjectRef.current = false; // 手动定位后不再跟随项目
         appendLines({ type: "output", text: t("terminal.cdTo", { path: resolved }) });
       } else {
         appendLines({ type: "output", text: t("terminal.cdFailed", { path: target }) });
@@ -207,7 +228,8 @@ const TerminalSession = memo(forwardRef<TerminalSessionHandle, TerminalSessionPr
       const res = await fetch("/api/terminal/exec", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd, command }),
+        // cwd 为空（home 预取失败等极端情况）时回退 home，避免 400
+        body: JSON.stringify({ cwd: cwd || homeDirRef.current || "", command }),
         signal: abort.signal,
       });
       if (!res.ok || !res.body) {
@@ -350,7 +372,7 @@ interface TerminalTabInfo {
   label: string;
 }
 
-export function TerminalPanel({ initialCwd, onClose, open = true }: Props) {
+export function TerminalPanel({ initialCwd, projectCwd, onClose, open = true }: Props) {
   const { t } = useI18n();
   const [tabs, setTabs] = useState<TerminalTabInfo[]>([{ id: 0, label: "1" }]);
   const [activeId, setActiveId] = useState(0);
@@ -418,9 +440,9 @@ export function TerminalPanel({ initialCwd, onClose, open = true }: Props) {
     setTabs((prev) => [...prev, { id, label }]);
     setActiveId(id);
     setRunning(runningRef.current[id] ?? false);
-    // 新 tab 继承当前活动 tab 的 cwd（fallback 面板初始 cwd）
-    cwdRef.current[id] = activeCwd ?? initialCwd ?? "";
-  }, [activeCwd, initialCwd]);
+    // 新 tab 继承当前活动 tab 的 cwd（fallback 项目目录）
+    cwdRef.current[id] = activeCwd ?? projectCwd ?? "";
+  }, [activeCwd, projectCwd]);
 
   const closeTab = useCallback((id: number) => {
     // 先终止可能运行中的命令
@@ -623,7 +645,9 @@ export function TerminalPanel({ initialCwd, onClose, open = true }: Props) {
         >
           <TerminalSession
             ref={setSessionRef(tab.id)}
-            initialCwd={tab.id === 0 ? initialCwd : (cwdRef.current[tab.id] || initialCwd || null)}
+            initialCwd={tab.id === 0 ? initialCwd : (cwdRef.current[tab.id] || projectCwd || null)}
+            followProject={tab.id === 0}
+            projectCwd={projectCwd}
             onRunningChange={getRunningHandler(tab.id)}
             onCwdChange={getCwdHandler(tab.id)}
           />
