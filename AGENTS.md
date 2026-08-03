@@ -211,3 +211,29 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 --accent --user-bg --tool-bg
 --font-mono
 ```
+
+## 皮肤系统（Skin）
+
+- 皮肤注册表在 `lib/skins.ts`（`SKINS`）：每款皮肤定义一套 CSS 变量的亮/暗取值。
+- 应用方式：`data-skin` 属性 + `dark` class + inline `style.setProperty` 注入变量（inline 优先级压过 `globals.css` 的 `:root`/`html.dark` 兜底）。
+- `hooks/useTheme.ts` 返回 `{ theme, isDark, skinId, skin, skins, toggleTheme, setSkin }`；亮暗切换与换肤共用 View Transitions 圆形过渡。
+- 持久化：`localStorage` 的 `pi-theme` + `pi-skin`；首帧恢复由 `app/layout.tsx` 的内联脚本完成（`getSkinBootstrapScript()`，在 paint 前注入变量，避免闪烁）。
+- 新增语义色变量（皮肤可一并调教）：`--success --danger --warning --info --diff-add --diff-del --diff-mod --diff-rename --on-accent`。组件一律用 `var(...)` 引用，禁止硬编码色值（状态色/阴影除外）。
+- 顶栏调色板按钮（`AppShell.tsx` 的 `theme` topPanel）是皮肤选择入口。
+
+## 源代码管理（SCM）
+
+- 侧栏底部"源代码管理"按钮切换 `sidebarView`（`AppShell.tsx`），内容为 `components/SourceControlPanel.tsx`。
+- 分组：暂存（index 有状态）/ 更改（worktree 有状态或冲突）/ 未跟踪；按目录树折叠；文件行 hover 出暂存/取消暂存/放弃/diff 按钮。
+- 写操作统一走 `POST /api/git/command`（`app/api/git/command/route.ts`），action 白名单 + cwd/路径 allowedRoots 校验；实现见 `lib/git-commands.ts`（execFile 包装，30s 超时）。
+- 只读：`GET /api/git/status`（已有）、`/api/git/branch`、`/api/git/log`。
+- 放弃更改（discard）与删除分支是破坏性操作，UI 有 confirm。`git clean` 必须显式传路径，禁止全量 clean。
+
+## 桌面端（Tauri，`src-tauri/`）
+
+- 壳模式：Rust 侧 `server.rs` spawn 打包进 Resources 的 Node 侧车运行 `bin/pi-web.js --port <port> --no-open`，健康检查通过后创建 Webview 窗口加载 `http://127.0.0.1:<port>`；退出时 kill 子进程（`ServerState` 保存 Child）。
+- `tauri dev` 直接加载 `http://127.0.0.1:30141`（需要 dev server 运行）；`npm run desktop:build` 走完整流程（`scripts/desktop-build.mjs`：next build → 打包产线依赖到 `src-tauri/resources/pi-web` → 下载 Node 22 到 `src-tauri/binaries/node-<triple>` → tauri build）。
+- `tauri.conf.json` 配置了 `withGlobalTauri`，前端经 `lib/desktop.ts`（`isDesktop()` 守卫）调用 `window.__TAURI__.core.invoke`：`select_directory`（原生目录选择器）、`reveal_in_finder`、`notify`。浏览器环境全部安全降级。
+- 外链（非 127.0.0.1 的 http/https）在 `on_navigation` 拦截交给系统浏览器。
+- 关闭窗口 → 隐藏到托盘（托盘菜单退出才真正退出）；单实例插件聚焦已有窗口；窗口状态持久化。
+- `src-tauri/binaries/`、`src-tauri/resources/`、`src-tauri/target/` 均 gitignored，CI 里由构建脚本生成。

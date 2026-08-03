@@ -10,6 +10,7 @@ import { vs } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import ReactMarkdown from "react-markdown";
 import { useTheme } from "@/hooks/useTheme";
+import { isDesktop, revealInFinderDesktop } from "@/lib/desktop";
 import {
   DOCX_PREVIEW_MAX_BYTES,
   getFileExt,
@@ -19,6 +20,7 @@ import {
 } from "@/lib/file-types";
 import { encodeFilePathForApi, getFileDirectory, getFileName, getRelativeFilePath } from "@/lib/file-paths";
 import { resolveLocalFileHref } from "@/lib/file-links";
+import { copyText } from "@/lib/clipboard";
 import { markdownPreviewRehypePlugins, markdownPreviewRemarkPlugins, normalizeDisplayMath } from "@/lib/markdown";
 import { CodeBlock, MermaidBlock } from "./MermaidBlock";
 import { parseUnifiedPatch } from "@/lib/patch";
@@ -275,9 +277,13 @@ function diffLines(patch: string): DiffLine[] {
   }));
 }
 
-function DiffView({ patch }: { patch: string }) {
+export function DiffView({ patch }: { patch: string }) {
   const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
   const diff = diffLines(patch);
+
+  const added = diff.filter((l) => l.type === "added").length;
+  const removed = diff.filter((l) => l.type === "removed").length;
 
   const hasChanges = diff.some((l) => l.type !== "unchanged");
   if (!hasChanges) {
@@ -327,6 +333,51 @@ function DiffView({ patch }: { patch: string }) {
         ...FILE_CODE_STYLE,
       }}
     >
+      <div
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 3,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "4px 12px",
+          background: "var(--bg-panel)",
+          borderBottom: "1px solid var(--border)",
+          fontSize: 11,
+          fontFamily: "var(--font-mono)",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        <span style={{ color: "var(--diff-add)", fontWeight: 650 }}>+{added}</span>
+        <span style={{ color: "var(--diff-del)", fontWeight: 650 }}>−{removed}</span>
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={() => {
+            void copyText(patch).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            });
+          }}
+          title={t("i18n.copyDiff")}
+          style={{
+            display: "flex", alignItems: "center", gap: 4,
+            height: 20, padding: "0 8px",
+            border: "1px solid var(--border)", borderRadius: 4,
+            background: copied ? "var(--bg-selected)" : "var(--bg)",
+            color: copied ? "var(--success)" : "var(--text-muted)",
+            cursor: "pointer", fontSize: 10,
+          }}
+        >
+          {copied ? (
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+          ) : (
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+          )}
+          {copied ? t("i18n.copied") : t("i18n.copyDiff")}
+        </button>
+      </div>
       {segments.map((seg, si) => {
         if (seg.hidden) {
           const result = (
@@ -349,14 +400,14 @@ function DiffView({ patch }: { patch: string }) {
         const lines = seg.lines.map((line, li) => {
           const bg =
             line.type === "added"
-              ? "rgba(0,200,80,0.12)"
+              ? "color-mix(in srgb, var(--diff-add) 16%, transparent)"
               : line.type === "removed"
-              ? "rgba(240,60,60,0.14)"
+              ? "color-mix(in srgb, var(--diff-del) 18%, transparent)"
               : "transparent";
           const prefix =
             line.type === "added" ? "+" : line.type === "removed" ? "-" : " ";
           const prefixColor =
-            line.type === "added" ? "#4ade80" : line.type === "removed" ? "#f87171" : "var(--text-dim)";
+            line.type === "added" ? "var(--diff-add)" : line.type === "removed" ? "var(--diff-del)" : "var(--text-dim)";
 
           return (
             <div
@@ -367,9 +418,9 @@ function DiffView({ patch }: { patch: string }) {
                 minWidth: "100%",
                 background: bg,
                 borderLeft: line.type === "added"
-                  ? "3px solid #4ade80"
+                  ? "3px solid var(--diff-add)"
                   : line.type === "removed"
-                  ? "3px solid #f87171"
+                  ? "3px solid var(--diff-del)"
                   : "3px solid transparent",
               }}
             >
@@ -480,16 +531,16 @@ function ImageViewer({ filePath, cwd, sourceSessionId }: Props) {
         {formatSizeStr && <span>{formatSizeStr}</span>}
         <span
           title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)" }}
+          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "var(--success)" : "var(--text-dim)" }}
         >
           <span
             style={{
               width: 7,
               height: 7,
               borderRadius: "50%",
-              background: watching ? "#4ade80" : "var(--border)",
+              background: watching ? "var(--success)" : "var(--border)",
               display: "inline-block",
-              boxShadow: watching ? "0 0 4px #4ade80" : "none",
+              boxShadow: watching ? "0 0 4px var(--success)" : "none",
             }}
           />
           {watching ? "live" : "static"}
@@ -512,7 +563,7 @@ function ImageViewer({ filePath, cwd, sourceSessionId }: Props) {
         }}
       >
         {error ? (
-          <div style={{ color: "#f87171", fontSize: 13 }}>{error}</div>
+          <div style={{ color: "var(--danger)", fontSize: 13 }}>{error}</div>
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -614,16 +665,16 @@ function AudioViewer({ filePath, cwd, sourceSessionId }: Props) {
         {size != null && <span>{formatSize(size)}</span>}
         <span
           title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)" }}
+          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "var(--success)" : "var(--text-dim)" }}
         >
           <span
             style={{
               width: 7,
               height: 7,
               borderRadius: "50%",
-              background: watching ? "#4ade80" : "var(--border)",
+              background: watching ? "var(--success)" : "var(--border)",
               display: "inline-block",
-              boxShadow: watching ? "0 0 4px #4ade80" : "none",
+              boxShadow: watching ? "0 0 4px var(--success)" : "none",
             }}
           />
           {watching ? "live" : "static"}
@@ -642,7 +693,7 @@ function AudioViewer({ filePath, cwd, sourceSessionId }: Props) {
       >
         <div style={{ width: "min(680px, 100%)" }}>
           {error && (
-            <div style={{ color: "#f87171", fontSize: 13, marginBottom: 12, textAlign: "center" }}>
+            <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 12, textAlign: "center" }}>
               {error}
             </div>
           )}
@@ -749,16 +800,16 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
         <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
         <span
           title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)", flexShrink: 0 }}
+          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "var(--success)" : "var(--text-dim)", flexShrink: 0 }}
         >
           <span
             style={{
               width: 7,
               height: 7,
               borderRadius: "50%",
-              background: watching ? "#4ade80" : "var(--border)",
+              background: watching ? "var(--success)" : "var(--border)",
               display: "inline-block",
-              boxShadow: watching ? "0 0 4px #4ade80" : "none",
+              boxShadow: watching ? "0 0 4px var(--success)" : "none",
             }}
           />
           {watching ? "live" : "static"}
@@ -766,7 +817,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
       </div>
       <div style={{ flex: 1, minHeight: 0, background: "var(--bg-panel)" }}>
         {error ? (
-          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, color: "#f87171", fontSize: 13, textAlign: "center" }}>
+          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, color: "var(--danger)", fontSize: 13, textAlign: "center" }}>
             {error}
           </div>
         ) : (
@@ -805,10 +856,13 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [displayMode, setDisplayMode] = useState<DisplayMode>("source");
+  const [diffCached, setDiffCached] = useState(false);
   const [wrapLines, setWrapLines] = useState(false);
   const [watching, setWatching] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const gitDiffRequestRef = useRef(0);
+  const diffCachedRef = useRef(false);
+  diffCachedRef.current = diffCached;
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [selectedLineRange, setSelectedLineRange] = useState<SelectedLineRange | null>(null);
 
@@ -830,7 +884,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
       });
   }, [sourceSessionId]);
 
-  const fetchGitDiff = useCallback(async (targetPath: string) => {
+  const fetchGitDiff = useCallback(async (targetPath: string, cached = false) => {
     const requestId = ++gitDiffRequestRef.current;
     setGitDiffLoading(true);
     if (!cwd) {
@@ -841,6 +895,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
 
     try {
       const params = new URLSearchParams({ cwd, path: targetPath });
+      if (cached) params.set("cached", "1");
       const response = await fetch(`/api/git/diff?${params.toString()}`);
       const next = await response.json() as GitFileDiffResponse & { error?: string };
       if (requestId !== gitDiffRequestRef.current) return;
@@ -879,7 +934,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
 
     es.addEventListener("change", () => {
       void fetchContent(filePath);
-      void fetchGitDiff(filePath);
+      void fetchGitDiff(filePath, diffCachedRef.current);
     });
 
     es.addEventListener("error", () => {
@@ -897,8 +952,8 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
   }, [filePath, fetchContent, fetchGitDiff, sourceSessionId]);
 
   useEffect(() => {
-    void fetchGitDiff(filePath);
-  }, [fetchGitDiff, filePath, gitRefreshKey]);
+    void fetchGitDiff(filePath, diffCached);
+  }, [fetchGitDiff, filePath, gitRefreshKey, diffCached]);
 
   useEffect(() => {
     if (data?.language === "markdown" && initialDisplayMode !== "diff") {
@@ -908,6 +963,12 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
 
   const hasGitDiff = gitDiff?.supported === true && typeof gitDiff.patch === "string";
   const isDeletedDiff = hasGitDiff && gitDiff.status === "deleted";
+  // 已暂存视图对 deleted/untracked 文件不可用，自动回落
+  useEffect(() => {
+    if (diffCached && !gitDiffLoading && gitDiff === null) {
+      setDiffCached(false);
+    }
+  }, [diffCached, gitDiff, gitDiffLoading]);
 
   useEffect(() => {
     if (!hasGitDiff && displayMode === "diff") setDisplayMode("source");
@@ -1000,7 +1061,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
 
   if (error && !isDeletedDiff) {
     return (
-      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#f87171", fontSize: 13 }}>
+      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--danger)", fontSize: 13 }}>
         {error}
       </div>
     );
@@ -1054,13 +1115,43 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
             aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
             className="file-viewer-live-indicator"
             style={{
-              background: watching ? "#4ade80" : "var(--border)",
-              boxShadow: watching ? "0 0 4px #4ade80" : "none",
+              background: watching ? "var(--success)" : "var(--border)",
+              boxShadow: watching ? "0 0 4px var(--success)" : "none",
             }}
           />
         )}
 
         <div className="file-viewer-controls">
+          {hasGitDiff && effectiveDisplayMode === "diff" && (
+            <div className="file-viewer-mode-switch" aria-label={t("i18n.diffScope")} style={{ marginRight: 6 }}>
+              <button
+                type="button"
+                onClick={() => setDiffCached(false)}
+                title={t("i18n.diffUnstaged")}
+                aria-pressed={!diffCached}
+                className="file-viewer-mode-button"
+                style={{
+                  background: !diffCached ? "var(--bg-selected)" : "transparent",
+                  color: !diffCached ? "var(--text)" : "var(--text-muted)",
+                }}
+              >
+                {t("i18n.diffUnstaged")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDiffCached(true)}
+                title={t("i18n.diffStaged")}
+                aria-pressed={diffCached}
+                className="file-viewer-mode-button"
+                style={{
+                  background: diffCached ? "var(--bg-selected)" : "transparent",
+                  color: diffCached ? "var(--text)" : "var(--text-muted)",
+                }}
+              >
+                {t("i18n.diffStaged")}
+              </button>
+            </div>
+          )}
           {displayModes.length > 1 && (
             <div className="file-viewer-mode-switch" aria-label={t("i18n.fileViewMode")}>
               {displayModes.map((mode) => {
@@ -1123,6 +1214,21 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
           </div>
 
           {!isDeletedDiff && <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />}
+          {isDesktop() && (
+            <button
+              type="button"
+              onClick={() => void revealInFinderDesktop(filePath)}
+              title={t("i18n.revealInFinder")}
+              aria-label={t("i18n.revealInFinder")}
+              className="file-viewer-icon-button"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                <polyline points="15 3 21 3 21 9" />
+                <line x1="10" y1="14" x2="21" y2="3" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 

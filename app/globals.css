@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* 隐藏 Next.js 开发模式左下角的 DevTools 浮动按钮（生产构建本来就不会出现） */
+[data-nextjs-dev-tools-button] {
+  display: none !important;
+}
+
 @theme {
   --color-bg: var(--bg);
   --color-bg-panel: var(--bg-panel);
@@ -33,6 +38,16 @@
   --assistant-bg: #ffffff;
   --tool-bg: #f9fafb;
   --bg-subtle: rgba(0,0,0,0.03);
+  /* 语义色（状态/差异/强调上的文字色） */
+  --success: #16a34a;
+  --danger: #dc2626;
+  --warning: #d97706;
+  --info: #2563eb;
+  --diff-add: #4ade80;
+  --diff-del: #f87171;
+  --diff-mod: #d6a84b;
+  --diff-rename: #60a5fa;
+  --on-accent: #ffffff;
 }
 
 html.dark {
@@ -50,6 +65,15 @@ html.dark {
   --assistant-bg: #1a1a1a;
   --tool-bg: #1f2937;
   --bg-subtle: rgba(255,255,255,0.04);
+  --success: #4ade80;
+  --danger: #f87171;
+  --warning: #fbbf24;
+  --info: #60a5fa;
+  --diff-add: #4ade80;
+  --diff-del: #f87171;
+  --diff-mod: #d6a84b;
+  --diff-rename: #60a5fa;
+  --on-accent: #0b1220;
 }
 
 /* Theme toggle: circular wipe via View Transitions API.

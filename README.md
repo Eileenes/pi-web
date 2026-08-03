@@ -89,6 +89,74 @@ npx @agegr/pi-web@latest
 - **Forks vs in-session branches**: Fork creates a new `.jsonl` file. "Edit from here" creates another branch inside the same session file.
 - **Internationalization**: see [Internationalization](./docs/i18n.md) for using translations and adding languages or UI text.
 
+## Desktop App (Tauri)
+
+Pi Web also ships a native desktop shell built with [Tauri](https://v2.tauri.app/) (`src-tauri/`). The shell spawns the pi-web server with a bundled Node.js 22 runtime (no system Node required) and renders the same interface in a native window with desktop integrations:
+
+- **System tray**: show/hide the window, start a new session, or quit (closing the window hides to tray — quit from the tray menu to fully exit and stop the server).
+- **Native folder picker**: the directory picker offers a "System" button that opens the OS folder dialog.
+- **Reveal in Finder / Explorer**: open a file's location in the system file manager from the file viewer toolbar.
+- **Native notifications**: get a system notification when the agent finishes a run.
+- **External links open in your browser**: http(s) links that point outside the local server are handed to the default browser.
+- **Single instance & window state**: launching the app again focuses the existing window; window size/position is remembered.
+- **Official pi icon**: the app icon is the official pi logo from [pi.dev](https://pi.dev).
+
+Everything else — skins/themes, source control (SCM), model config, sessions — is identical to the web version.
+
+### Requirements
+
+- Node.js 22.19.0+ (for building)
+- Rust toolchain (`cargo`, `rustc` 1.77+)
+- macOS: Xcode Command Line Tools (`xcode-select --install`) for building
+- Network access to crates.io (a [Rust mirror](https://rsproxy.cn/) is recommended if crates.io is slow)
+
+### Development mode
+
+Run the Next.js dev server and the desktop shell in two terminals:
+
+```bash
+npm install
+npm run dev          # terminal 1: Next.js dev server on http://127.0.0.1:30141
+npm run tauri dev    # terminal 2: desktop shell (loads the dev server)
+```
+
+### Build a distributable app (macOS)
+
+```bash
+npm run desktop:build
+```
+
+The build script (`scripts/desktop-build.mjs`) does the following automatically:
+
+1. `next build` — production build of the web app
+2. Packs the runtime (`public`, `bin`, production-only `node_modules`) into `src-tauri/resources/pi-web/`
+3. Downloads the Node 22 LTS runtime and places it as the Tauri sidecar (`src-tauri/binaries/node-<target-triple>`)
+4. Runs `tauri build`
+
+Artifacts land in `src-tauri/target/release/bundle/` as `Pi Web.app` and `Pi Web.dmg`. The app is fully self-contained (bundled Node runtime + pi-web server). Make sure no dev server is running on port 30141 before building.
+
+### src-tauri layout
+
+```text
+src-tauri/
+  src/
+    main.rs         # entry point
+    lib.rs          # app setup, plugins, window events, server lifecycle
+    server.rs       # port probe → spawn bundled Node → health check → spawn window
+    tray.rs         # system tray menu (toggle / new session / quit)
+    commands.rs     # Tauri commands: select_directory, reveal_in_finder, notify
+  tauri.conf.json   # window, bundle, externalBin (node sidecar), resources
+  icons/            # app icons (generated from the official pi logo)
+  binaries/         # bundled Node runtime (gitignored, produced by desktop:build)
+  resources/pi-web/ # packed pi-web runtime (gitignored, produced by desktop:build)
+```
+
+### Notes
+
+- Closing the window hides it to the tray; the server keeps running in the background. Choose **Quit** in the tray menu to exit and stop the server.
+- The port auto-detects: 30141 by default, and falls back to a free port if it is occupied.
+- `src-tauri/binaries/`, `src-tauri/resources/`, and `src-tauri/target/` are gitignored and produced by the build script.
+
 ## Development
 
 ```bash

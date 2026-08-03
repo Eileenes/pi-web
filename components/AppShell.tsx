@@ -4,6 +4,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
+import { SourceControlPanel } from "./SourceControlPanel";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
@@ -13,6 +14,7 @@ import { PluginsConfig } from "./PluginsConfig";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
 import { BranchNavigator } from "./BranchNavigator";
 import { useTheme } from "@/hooks/useTheme";
+import { isDesktop } from "@/lib/desktop";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useViewportHeight } from "@/hooks/useViewportHeight";
@@ -46,12 +48,13 @@ type AutoNameStatus =
 
 const TOP_BAR_ICON_BUTTON_SIZE = 36;
 const LANGUAGE_MENU_WIDTH = 176;
+const THEME_MENU_WIDTH = 264;
 
 export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [initialNavigation] = useState(() => getInitialNavigation(searchParams));
-  const { isDark, toggleTheme } = useTheme();
+  const { isDark, toggleTheme, skinId, skins, setSkin } = useTheme();
   const { locale, setLocale, t: translate, supportedLocales } = useI18n();
   const isMobile = useIsMobile();
   useViewportHeight();
@@ -74,6 +77,7 @@ export function AppShell() {
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
   const [projectTrustError, setProjectTrustError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarView, setSidebarView] = useState<"sessions" | "scm">("sessions");
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   const sidebarWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
@@ -145,6 +149,7 @@ export function AppShell() {
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
   const languageBtnRef = useRef<HTMLButtonElement>(null);
+  const themeBtnRef = useRef<HTMLButtonElement>(null);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
@@ -201,10 +206,10 @@ export function AppShell() {
   }, []);
 
   // Single active panel — only one dropdown open at a time
-  const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "system" | "session" | "language" | null>(null);
+  const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "system" | "session" | "language" | "theme" | null>(null);
   const [topPanelPos, setTopPanelPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
-  const toggleTopPanel = useCallback((panel: "branches" | "system" | "session" | "language") => {
+  const toggleTopPanel = useCallback((panel: "branches" | "system" | "session" | "language" | "theme") => {
     if (isMobile) setSidebarOpen(false);
     setActiveTopPanel((cur) => cur === panel ? null : panel);
   }, [isMobile]);
@@ -233,12 +238,23 @@ export function AppShell() {
         setTopPanelPos({ top: topBarRect.bottom, left, width });
         return;
       }
+      if (activeTopPanel === "theme" && !isMobile && themeBtnRef.current) {
+        const buttonRect = themeBtnRef.current.getBoundingClientRect();
+        const width = Math.min(THEME_MENU_WIDTH, topBarRect.width);
+        const left = Math.min(
+          buttonRect.left - 1,
+          Math.max(topBarRect.left, topBarRect.right - width),
+        );
+        setTopPanelPos({ top: topBarRect.bottom, left, width });
+        return;
+      }
       setTopPanelPos({ top: topBarRect.bottom, left: topBarRect.left, width: topBarRect.width });
     };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(topBarRef.current);
     if (languageBtnRef.current) ro.observe(languageBtnRef.current);
+    if (themeBtnRef.current) ro.observe(themeBtnRef.current);
     return () => ro.disconnect();
   }, [activeTopPanel, isMobile]);
 
@@ -385,6 +401,16 @@ export function AppShell() {
     onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
     activeCwd,
   });
+
+  // 桌面端托盘菜单“新建会话”事件 → 打开新会话流程
+  useEffect(() => {
+    if (!isDesktop()) return;
+    const handler = () => {
+      handleNewSession(`desktop-${Date.now()}`, activeCwd ?? "");
+    };
+    window.addEventListener("pi-desktop-new-session", handler);
+    return () => window.removeEventListener("pi-desktop-new-session", handler);
+  }, [handleNewSession, activeCwd]);
 
   // Client-built transient SessionInfo (new session / fork) lacks the
   // server-computed projectRoot, which the same-project check in
@@ -615,7 +641,13 @@ export function AppShell() {
     return () => observer.disconnect();
   }, [windowTitle]);
 
-  const sidebarContent = (
+  const sidebarContent = sidebarView === "scm" ? (
+    <SourceControlPanel
+      cwd={selectedSession?.cwd ?? newSessionCwd ?? null}
+      onOpenFile={handleOpenFile}
+      onBack={() => setSidebarView("sessions")}
+    />
+  ) : (
     <>
       <SessionSidebar
         selectedSessionId={selectedSession?.id ?? null}
@@ -636,6 +668,16 @@ export function AppShell() {
       />
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
+          {
+             label: translate("scm.sidebarLabel"),
+            onClick: () => { setSidebarOpen(true); setSidebarView("scm"); },
+            disabled: false,
+            icon: (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M6 9v6" /><path d="M18 9a6 6 0 0 0-6-6v0" />
+              </svg>
+            ),
+          },
           {
              label: translate("common.models"),
             onClick: () => setModelsConfigOpen(true),
@@ -853,35 +895,33 @@ export function AppShell() {
             )}
           </button>
           <button
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-            }}
-             title={isDark ? translate("theme.light") : translate("theme.dark")}
-             aria-label={isDark ? translate("theme.light") : translate("theme.dark")}
-            aria-pressed={isDark}
+            ref={themeBtnRef}
+            type="button"
+            onClick={() => toggleTopPanel("theme")}
+            title={translate("skin.title")}
+            aria-label={translate("skin.title")}
+            aria-haspopup="menu"
+            aria-expanded={activeTopPanel === "theme"}
+            aria-pressed={activeTopPanel === "theme"}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
               width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
-              background: "none", border: "none", borderRight: "1px solid var(--border)",
-              color: "var(--text-muted)", cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
+              background: activeTopPanel === "theme" ? "var(--bg-selected)" : "none",
+              border: "none", borderRight: "1px solid var(--border)",
+              color: activeTopPanel === "theme" ? "var(--text)" : "var(--text-muted)",
+              cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
             }}
             onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = activeTopPanel === "theme" ? "var(--text)" : "var(--text-muted)";
+            }}
           >
-            {isDark ? (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="5" />
-                <line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" />
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                <line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" />
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-              </svg>
-            ) : (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-              </svg>
-            )}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 22a10 10 0 1 1 10-10c0 2-1.5 3-3 3h-2a3 3 0 0 0-2 5c.6.8 1 1 1 2" />
+              <circle cx="7.5" cy="10.5" r="1.2" fill="currentColor" stroke="none" />
+              <circle cx="12" cy="7.5" r="1.2" fill="currentColor" stroke="none" />
+              <circle cx="16.5" cy="10.5" r="1.2" fill="currentColor" stroke="none" />
+            </svg>
            </button>
            <button
              ref={languageBtnRef}
@@ -942,7 +982,7 @@ export function AppShell() {
                 background: "none",
                 border: "none",
                 borderRight: "1px solid var(--border)",
-                color: "#d97706",
+                color: "var(--warning)",
                 cursor: "pointer",
                 flexShrink: 0,
                 fontSize: 11,
@@ -1146,8 +1186,8 @@ export function AppShell() {
             let ctxStr: string | null = null;
             if (contextUsage?.contextWindow) {
               const pct = contextUsage.percent;
-              if (pct !== null && pct > 90) ctxColor = "#ef4444";
-              else if (pct !== null && pct > 70) ctxColor = "rgba(234,179,8,0.95)";
+              if (pct !== null && pct > 90) ctxColor = "var(--danger)";
+              else if (pct !== null && pct > 70) ctxColor = "var(--warning)";
               ctxStr = pct !== null ? `${pct.toFixed(0)}% / ${fmt(contextUsage.contextWindow)}` : `? / ${fmt(contextUsage.contextWindow)}`;
             }
 
@@ -1286,6 +1326,105 @@ export function AppShell() {
                       <span>{plugin.label}</span>
                     </button>
                   ))}
+                </div>
+              )}
+              {activeTopPanel === "theme" && (
+                <div role="menu" aria-label={translate("skin.title")} style={{
+                  background: "var(--bg-panel)",
+                  borderLeft: "1px solid var(--border)",
+                  borderRight: "1px solid var(--border)",
+                  borderBottom: "1px solid var(--border)",
+                  padding: 8,
+                }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+                    {skins.map((skin) => {
+                      const selected = skinId === skin.id;
+                      return (
+                        <button
+                          key={skin.id}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={selected}
+                          onClick={(e) => {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setSkin(skin.id, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+                            setActiveTopPanel(null);
+                          }}
+                          style={{
+                            display: "flex", flexDirection: "column", alignItems: "stretch", gap: 6,
+                            padding: 7, border: "1px solid var(--border)", borderRadius: 8,
+                            background: selected ? "var(--bg-selected)" : "var(--bg)",
+                            color: "var(--text)", cursor: "pointer", textAlign: "left",
+                            transition: "background 0.1s, border-color 0.1s",
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!selected) e.currentTarget.style.background = "var(--bg-hover)";
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!selected) e.currentTarget.style.background = "var(--bg)";
+                          }}
+                        >
+                          <span style={{
+                            display: "flex", alignItems: "center", gap: 3, height: 20, borderRadius: 4,
+                            padding: "0 5px", overflow: "hidden", flexShrink: 0,
+                            background: `linear-gradient(90deg, ${skin.preview.light[0]} 0%, ${skin.preview.light[0]} 50%, ${skin.preview.dark[0]} 50%, ${skin.preview.dark[0]} 100%)`,
+                          }}>
+                            <span style={{ width: 8, height: 8, borderRadius: "50%", background: skin.preview.light[3], border: "1px solid rgba(127,127,127,0.4)", flexShrink: 0 }} />
+                            <span style={{ width: 8, height: 8, borderRadius: "50%", background: skin.preview.dark[3], border: "1px solid rgba(127,127,127,0.4)", flexShrink: 0, marginLeft: "auto" }} />
+                          </span>
+                          <span style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.2 }}>
+                            {translate(`skin.${skin.id}`)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+                    marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border)",
+                  }}>
+                    <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                      {translate(isDark ? "skin.darkMode" : "skin.lightMode")}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+                      }}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 5,
+                        height: 26, padding: "0 9px",
+                        border: "1px solid var(--border)", borderRadius: 6,
+                        background: "var(--bg)", color: "var(--text-muted)",
+                        cursor: "pointer", fontSize: 11,
+                        transition: "background 0.1s, color 0.1s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = "var(--bg-hover)";
+                        e.currentTarget.style.color = "var(--text)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "var(--bg)";
+                        e.currentTarget.style.color = "var(--text-muted)";
+                      }}
+                    >
+                      {isDark ? (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="5" />
+                          <line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" />
+                          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                          <line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" />
+                          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+                        </svg>
+                      ) : (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                        </svg>
+                      )}
+                      {translate(isDark ? "skin.lightMode" : "skin.darkMode")}
+                    </button>
+                  </div>
                 </div>
               )}
               {activeTopPanel === "system" && (
@@ -1510,7 +1649,7 @@ export function AppShell() {
               role="alert"
               style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
             >
-               <div style={{ fontSize: 14, color: "#dc2626" }}>{translate("workspace.unable")}</div>
+               <div style={{ fontSize: 14, color: "var(--danger)" }}>{translate("workspace.unable")}</div>
               <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
                 {initialNavigation.requestedCwd}
               </div>

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Noto_Sans_Mono } from "next/font/google";
 import { PwaRegistration } from "@/components/PwaRegistration";
+import { getSkinBootstrapScript } from "@/lib/skins";
 import "katex/dist/katex.min.css";
 import "./globals.css";
 
@@ -62,9 +63,7 @@ export default function RootLayout({
       <head>
         <meta name="google" content="notranslate" />
         <script
-          dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem("pi-theme");if(t==="dark")document.documentElement.classList.add("dark")}catch(e){}})();`,
-          }}
+          dangerouslySetInnerHTML={{ __html: getSkinBootstrapScript() }}
         />
       </head>
       <body translate="no" className="notranslate">
