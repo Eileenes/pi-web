@@ -8,6 +8,8 @@ import { DiffView } from "./FileViewer";
 
 interface Props {
   cwd: string | null;
+  /** 外部 git 变化（新 commit / 分支增删）时由父组件 bump，触发重载 */
+  refreshKey?: number;
 }
 
 const PAGE_SIZE = 50;
@@ -109,7 +111,7 @@ function CommitGraph({ row, width }: { row: GraphRow; width: number }) {
   );
 }
 
-export function GitHistoryPanel({ cwd }: Props) {
+export function GitHistoryPanel({ cwd, refreshKey }: Props) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -217,10 +219,10 @@ export function GitHistoryPanel({ cwd }: Props) {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
   }, []);
 
-  // 首屏加载：cwd 或 all 切换时重置
+  // 首屏加载：cwd / all 切换或外部 git 变化（refreshKey）时重置
   useEffect(() => {
     void loadPage(true);
-  }, [loadPage]);
+  }, [loadPage, refreshKey]);
 
   // 触底无限加载
   useEffect(() => {

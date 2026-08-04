@@ -17,6 +17,7 @@ import { ProjectTrustDialog } from "./ProjectTrustDialog";
 import { ConfirmDialogHost } from "./ConfirmDialog";
 import { BranchNavigator } from "./BranchNavigator";
 import { useTheme } from "@/hooks/useTheme";
+import { useAutoRefresh } from "@/hooks/useAutoRefresh";
 import { isDesktop } from "@/lib/desktop";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -71,6 +72,9 @@ export function AppShell() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [sessionKey, setSessionKey] = useState(0);
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
+  // 事件驱动的 SCM / 提交历史刷新 key（由 useAutoRefresh 收到外部变化后 bump）
+  const [scmRefreshKey, setScmRefreshKey] = useState(0);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [modelsConfigOpen, setModelsConfigOpen] = useState(false);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
   const [skillsConfigOpen, setSkillsConfigOpen] = useState(false);
@@ -241,7 +245,8 @@ export function AppShell() {
     }
   }, [sidebarView, sidebarOpen]);
 
-  // Activity Bar 的 git 变更数 badge：轮询当前项目状态
+  // Activity Bar 的 git 变更数 badge：事件驱动（git/workspace/agent 结束 → 重新拉取），
+  // 不再轮询。
   const activeProjectCwd = selectedSession?.cwd ?? newSessionCwd ?? null;
   useEffect(() => {
     if (!activeProjectCwd) {
@@ -262,15 +267,8 @@ export function AppShell() {
       }
     };
     void load();
-    const id = setInterval(() => {
-      // 后台 Tab 暂停轮询，与侧栏 running 轮询保持一致
-      if (document.visibilityState === "visible") void load();
-    }, 10_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [activeProjectCwd]);
+    return () => { cancelled = true; };
+  }, [activeProjectCwd, scmRefreshKey, explorerRefreshKey]);
 
   useEffect(() => {
     if (!activeTopPanel || !topBarRef.current) return;
@@ -490,6 +488,9 @@ export function AppShell() {
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
+    // agent 可能改了文件或提交：SCM / 历史一并刷新
+    setScmRefreshKey((k) => k + 1);
+    setHistoryRefreshKey((k) => k + 1);
   }, []);
 
   const handleAutoName = useCallback(async () => {
@@ -628,6 +629,31 @@ export function AppShell() {
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
   const projectCwd = selectedSession?.cwd ?? effectiveNewSessionCwd ?? activeCwd ?? null;
+
+  // 外部变化（终端 git 操作 / 外部编辑器保存 / 别的 pi 实例建会话）→ 即时刷新界面
+  useAutoRefresh(projectCwd, {
+    onGitChange: useCallback(() => {
+      // commit / 分支增删 / 切分支 / index / worktree → SCM 面板 + 历史 + 文件树 + badge
+      setScmRefreshKey((k) => k + 1);
+      setHistoryRefreshKey((k) => k + 1);
+      setExplorerRefreshKey((k) => k + 1);
+    }, []),
+    onWorkspaceChange: useCallback(() => {
+      // 工作树文件变化 → SCM 状态 + 文件树 + badge（历史不变，保留滚动位置）
+      setScmRefreshKey((k) => k + 1);
+      setExplorerRefreshKey((k) => k + 1);
+    }, []),
+    onSessionsChange: useCallback(() => {
+      setRefreshKey((k) => k + 1);
+    }, []),
+    onFocusRefresh: useCallback(() => {
+      // 窗口焦点兜底：补 FSEvents 偶发漏事件
+      setScmRefreshKey((k) => k + 1);
+      setHistoryRefreshKey((k) => k + 1);
+      setExplorerRefreshKey((k) => k + 1);
+      setRefreshKey((k) => k + 1);
+    }, []),
+  });
   const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
   const projectTrustCwd = selectedSession?.cwd ?? effectiveNewSessionCwd;
   // While restoring initial session from URL, don't show the placeholder
@@ -721,6 +747,8 @@ export function AppShell() {
   const sidebarContent = sidebarView === "scm" ? (
     <SourceControlPanel
       cwd={selectedSession?.cwd ?? newSessionCwd ?? null}
+      refreshKey={scmRefreshKey}
+      historyRefreshKey={historyRefreshKey}
       onOpenFile={handleOpenFile}
       onBack={() => setSidebarView("sessions")}
     />

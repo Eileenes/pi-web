@@ -9,6 +9,7 @@ import { GitHistoryPanel } from "./GitHistoryPanel";
 interface Props {
   cwd: string | null;
   refreshKey?: number;
+  historyRefreshKey?: number;
   onOpenFile?: (filePath: string, fileName: string, options?: { sourceSessionId?: string | null; modeHint?: "diff" }) => void;
   onBack: () => void;
 }
@@ -21,8 +22,6 @@ const STATUS_META: Record<GitFileStatus["status"], { code: string; color: string
   untracked: { code: "U", color: "var(--diff-add)" },
   conflict: { code: "C", color: "var(--danger)" },
 };
-
-const POLL_MS = 10_000;
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -305,7 +304,7 @@ function FileGroup({
   );
 }
 
-export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Props) {
+export function SourceControlPanel({ cwd, refreshKey, historyRefreshKey, onOpenFile, onBack }: Props) {
   const { t } = useI18n();
   const [status, setStatus] = useState<GitStatusResponse | null>(null);
   const [branchInfo, setBranchInfo] = useState<GitBranchInfo | null>(null);
@@ -361,11 +360,11 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
     }
   }, [cwd]);
 
+  // 事件驱动刷新：挂载 + refreshKey（外部 git/工作树变化、agent 结束）变化时拉取，
+  // 不再轮询。
   useEffect(() => {
     setLoading(true);
     void refresh();
-    const id = setInterval(() => void refresh(), POLL_MS);
-    return () => clearInterval(id);
   }, [refresh, refreshKey]);
 
   useEffect(() => {
@@ -1110,7 +1109,7 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
       </div>
       {historyOpen && (
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-          <GitHistoryPanel cwd={cwd} />
+          <GitHistoryPanel cwd={cwd} refreshKey={historyRefreshKey} />
         </div>
       )}
     </div>
