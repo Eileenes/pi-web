@@ -46,6 +46,13 @@ export async function getRepositoryRoot(cwd: string): Promise<string | null> {
   return root ? root : null;
 }
 
+/** git 元数据目录的绝对路径（worktree 场景指向主仓库 .git/worktrees/<name>） */
+export async function getGitDir(cwd: string): Promise<string | null> {
+  const result = await runGit(cwd, ["rev-parse", "--absolute-git-dir"]);
+  const dir = result.ok ? result.stdout.trim() : "";
+  return dir ? dir : null;
+}
+
 export async function gitStage(cwd: string, paths: string[]): Promise<GitCommandOutput> {
   if (paths.length > 0) return runGit(cwd, ["add", ...quotePaths(paths)]);
   return runGit(cwd, ["add", "-A"]);
