@@ -314,9 +314,23 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
   const [commitMsg, setCommitMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [generatingMessage, setGeneratingMessage] = useState(false);
+  const commitInputRef = useRef<HTMLTextAreaElement>(null);
+  const autoResizeCommitInput = useCallback((el: HTMLTextAreaElement) => {
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+    el.style.overflowY = el.scrollHeight > 140 ? "auto" : "hidden";
+  }, []);
+  const commitMultiline = commitMsg.includes("\n");
+  // commitMsg 变化（含 AI 生成填入）时自动增高输入框
+  useEffect(() => {
+    const el = commitInputRef.current;
+    if (el) autoResizeCommitInput(el);
+  }, [commitMsg, autoResizeCommitInput]);
   const [showBranches, setShowBranches] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");
-  const [activeTab, setActiveTab] = useState<"changes" | "history">("changes");
+  const [changesOpen, setChangesOpen] = useState(true);
+  const [historyOpen, setHistoryOpen] = useState(true);
   const branchRef = useRef<HTMLDivElement>(null);
   const gitRequestRef = useRef(0);
 
@@ -429,6 +443,49 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
     }
     setCommitMsg("");
   }, [commitMsg, runCommand, t, groups.staged.length, hasChanges]);
+
+  // AI 生成提交信息：临时 AgentSession 分析变更并写 commit message（流式逐字展示）
+  const handleGenerateMessage = useCallback(async () => {
+    if (!cwd || generatingMessage) return;
+    setGeneratingMessage(true);
+    setFeedback(t("scm.generatingStatus"));
+    setCommitMsg("");
+    try {
+      const res = await fetch("/api/git/commit-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd }),
+      });
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({} as { error?: string }));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        if (chunk) setCommitMsg((prev) => prev + chunk);
+      }
+      setCommitMsg((prev) => {
+        const final = prev.trim();
+        setFeedback(final ? t("scm.messageGenerated") : t("scm.generateFailed"));
+        return final;
+      });
+      requestAnimationFrame(() => {
+        const el = commitInputRef.current;
+        if (el) {
+          autoResizeCommitInput(el);
+          el.focus();
+        }
+      });
+    } catch (e) {
+      setFeedback(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGeneratingMessage(false);
+    }
+  }, [cwd, generatingMessage, t, autoResizeCommitInput]);
 
   const canCommit = (groups.staged.length > 0 || hasChanges) && commitMsg.trim().length > 0 && !busy;
   const canStageAll = !busy && (groups.unstaged.length + groups.untracked.length) > 0;
@@ -577,39 +634,6 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
         </button>
       </div>
 
-      {/* Tab bar: changes / history */}
-      <div style={{ display: "flex", gap: 2, padding: "0 8px", flexShrink: 0, borderBottom: "1px solid var(--border)" }}>
-        <button
-          type="button"
-          onClick={() => setActiveTab("changes")}
-          style={{
-            position: "relative", height: 26, padding: "0 10px",
-            border: "none", background: "transparent", cursor: "pointer",
-            fontSize: 11, fontWeight: 650,
-            color: activeTab === "changes" ? "var(--text)" : "var(--text-muted)",
-          }}
-        >
-          {t("scm.tabChanges")}
-          {activeTab === "changes" && (
-            <span style={{ position: "absolute", left: 8, right: 8, bottom: -1, height: 2, background: "var(--accent)", borderRadius: 1 }} />
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("history")}
-          style={{
-            position: "relative", height: 26, padding: "0 10px",
-            border: "none", background: "transparent", cursor: "pointer",
-            fontSize: 11, fontWeight: 650,
-            color: activeTab === "history" ? "var(--text)" : "var(--text-muted)",
-          }}
-        >
-          {t("scm.tabHistory")}
-          {activeTab === "history" && (
-            <span style={{ position: "absolute", left: 8, right: 8, bottom: -1, height: 2, background: "var(--accent)", borderRadius: 1 }} />
-          )}
-        </button>
-      </div>
 
       {/* Branch row */}
       <div style={{ padding: "2px 8px 6px", flexShrink: 0, position: "relative" }}>
@@ -771,9 +795,26 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
         </div>
       </div>
 
-      {/* Changes / History content */}
-      {activeTab === "changes" ? (
-        <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0 }}>
+      {/* 更改 section（上） */}
+      <div style={{ display: "flex", alignItems: "center", height: 26, padding: "0 10px", flexShrink: 0, borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)", background: "var(--bg-panel)" }}>
+        <button
+          type="button"
+          onClick={() => setChangesOpen((v) => !v)}
+          aria-expanded={changesOpen}
+          style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: "transparent", color: "var(--text-muted)", cursor: "pointer", fontSize: 10.5, fontWeight: 700, letterSpacing: "0.03em", textTransform: "uppercase", padding: 0 }}
+        >
+          <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" style={{ transform: changesOpen ? "none" : "rotate(-90deg)", transition: "transform 0.12s" }}>
+            <polyline points="2 3 5 6 8 3" />
+          </svg>
+          <span>{t("scm.tabChanges")}</span>
+          {status?.isGitRepository && hasChanges && (
+            <span style={{ fontWeight: 500, color: "var(--text-dim)" }}>{status.files.length}</span>
+          )}
+        </button>
+      </div>
+      {changesOpen && (
+        <div style={{ maxHeight: "42%", minHeight: 0, display: "flex", flexDirection: "column", borderBottom: "1px solid var(--border)" }}>
+          <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0 }}>
           {status?.isGitRepository && hasChanges && (
           <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "2px 8px 6px", flexShrink: 0 }}>
             {selected.size > 0 ? (
@@ -938,73 +979,138 @@ export function SourceControlPanel({ cwd, refreshKey, onOpenFile, onBack }: Prop
             />
           </>
         )}
-      </div>
-      ) : (
-        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-          <GitHistoryPanel cwd={cwd} />
-        </div>
-      )}
-
-      {/* Commit box */}
-      {activeTab === "changes" && status?.isGitRepository && cwd && (
-        <div style={{ padding: "6px 8px", borderTop: "1px solid var(--border)", flexShrink: 0 }}>
-          <textarea
-            value={commitMsg}
-            onChange={(e) => setCommitMsg(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && canCommit) void handleCommit(false);
-            }}
-            placeholder={t("scm.commitPlaceholder")}
-            rows={2}
-            style={{
-              width: "100%", resize: "none", padding: "6px 8px",
-              border: "1px solid var(--border)", borderRadius: 6,
-              background: "var(--bg)", color: "var(--text)", fontSize: 12,
-              outline: "none", lineHeight: 1.4, fontFamily: "inherit",
-            }}
-          />
-          <div style={{ display: "flex", gap: 4, marginTop: 5 }}>
-            <button
-              type="button"
-              onClick={() => void handleCommit(false)}
-              disabled={!canCommit}
-              style={{
-                flex: 1, height: 26, padding: "0 8px", border: "1px solid var(--border)", borderRadius: 5,
-                background: canCommit ? "var(--accent)" : "var(--bg-panel)",
-                color: canCommit ? "var(--on-accent)" : "var(--text-dim)",
-                cursor: canCommit ? "pointer" : "default", fontSize: 11, fontWeight: 600,
-                opacity: busy ? 0.6 : 1,
-              }}
-            >
-              {busy ? t("scm.committing") : t("scm.commit")}
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleCommit(true)}
-              disabled={!canCommit}
-              title={t("scm.commitAndPushTitle")}
-              style={{
-                flex: 1, height: 26, padding: "0 8px", border: "1px solid var(--border)", borderRadius: 5,
-                background: canCommit ? "var(--bg)" : "var(--bg-panel)",
-                color: canCommit ? "var(--text)" : "var(--text-dim)",
-                cursor: canCommit ? "pointer" : "default", fontSize: 11, fontWeight: 600,
-                opacity: busy ? 0.6 : 1,
-              }}
-            >
-              {busy ? t("scm.committing") : t("scm.commitAndPush")}
-            </button>
           </div>
-          {groups.staged.length === 0 && hasChanges && !busy && (
-            <div style={{ marginTop: 4, fontSize: 10, color: "var(--text-dim)" }}>{t("scm.stageAllAndCommitHint")}</div>
-          )}
-          {feedback && (
-            <div style={{ marginTop: 4, fontSize: 11, color: "var(--success)", display: "flex", alignItems: "center", gap: 4 }}>
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-              {feedback}
+          {/* Commit box（更改 section 底部） */}
+          {status?.isGitRepository && cwd && (
+            <div style={{ padding: "6px 6px 4px", borderTop: "1px solid var(--border)", flexShrink: 0 }}>
+              <div style={{ position: "relative" }}>
+                <textarea
+                  ref={commitInputRef}
+                  value={commitMsg}
+                  readOnly={generatingMessage}
+                  onChange={(e) => {
+                    setCommitMsg(e.target.value);
+                    autoResizeCommitInput(e.target);
+                  }}
+                  onKeyDown={(e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && commitMsg.trim()) void handleCommit(false);
+                  }}
+                  placeholder={generatingMessage ? t("scm.generatingPlaceholder") : t("scm.commitPlaceholder")}
+                  rows={1}
+                  style={{
+                    display: "block",
+                    width: "100%", resize: "none", overflowY: "hidden",
+                    padding: "5px 32px 5px 8px",
+                    border: `1px solid ${generatingMessage ? "color-mix(in srgb, var(--accent) 60%, var(--border))" : "var(--border)"}`,
+                    borderRadius: 6,
+                    background: "var(--bg)", color: "var(--text)", fontSize: 11,
+                    outline: "none", lineHeight: 1.4, fontFamily: "inherit",
+                    transition: "border-color 0.15s",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleGenerateMessage()}
+                  disabled={generatingMessage || busy}
+                  title={generatingMessage ? t("scm.generating") : t("scm.generateMessage")}
+                  style={{
+                    position: "absolute", right: 4,
+                    top: commitMultiline ? 4 : "50%",
+                    transform: commitMultiline ? "none" : "translateY(-50%)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 22, height: 22, padding: 0,
+                    border: "none", borderRadius: 5,
+                    background: "transparent",
+                    color: generatingMessage ? "var(--accent)" : "var(--text-dim)",
+                    cursor: generatingMessage || busy ? "default" : "pointer",
+                    transition: "color 0.12s, background 0.12s",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!generatingMessage && !busy) {
+                      e.currentTarget.style.color = "var(--accent)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.color = generatingMessage ? "var(--accent)" : "var(--text-dim)";
+                  }}
+                >
+                  {generatingMessage ? (
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite" }}>
+                      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                    </svg>
+                  ) : (
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" />
+                      <circle cx="12" cy="12" r="3.5" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                <button
+                  type="button"
+                  onClick={() => void handleCommit(false)}
+                  disabled={!canCommit}
+                  style={{
+                    flex: 1, height: 24, padding: "0 8px", border: "1px solid var(--border)", borderRadius: 5,
+                    background: canCommit ? "var(--accent)" : "var(--bg-panel)",
+                    color: canCommit ? "var(--on-accent)" : "var(--text-dim)",
+                    cursor: canCommit ? "pointer" : "default", fontSize: 10.5, fontWeight: 600,
+                    opacity: busy ? 0.6 : 1,
+                  }}
+                >
+                  {busy ? t("scm.committing") : t("scm.commit")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCommit(true)}
+                  disabled={!canCommit}
+                  title={t("scm.commitAndPushTitle")}
+                  style={{
+                    flex: 1, height: 24, padding: "0 8px", border: "1px solid var(--border)", borderRadius: 5,
+                    background: canCommit ? "var(--bg)" : "var(--bg-panel)",
+                    color: canCommit ? "var(--text)" : "var(--text-dim)",
+                    cursor: canCommit ? "pointer" : "default", fontSize: 10.5, fontWeight: 600,
+                    opacity: busy ? 0.6 : 1,
+                  }}
+                >
+                  {busy ? t("scm.committing") : t("scm.commitAndPush")}
+                </button>
+              </div>
+              {groups.staged.length === 0 && hasChanges && !busy && (
+                <div style={{ marginTop: 4, fontSize: 10, color: "var(--text-dim)" }}>{t("scm.stageAllAndCommitHint")}</div>
+              )}
+              {feedback && (
+                <div style={{ marginTop: 4, fontSize: 11, color: "var(--success)", display: "flex", alignItems: "center", gap: 4 }}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  {feedback}
+                </div>
+              )}
             </div>
           )}
+          </div>
+      )}
+
+      {/* 历史 section（下） */}
+      <div style={{ display: "flex", alignItems: "center", height: 26, padding: "0 10px", flexShrink: 0, borderBottom: "1px solid var(--border)", background: "var(--bg-panel)" }}>
+        <button
+          type="button"
+          onClick={() => setHistoryOpen((v) => !v)}
+          aria-expanded={historyOpen}
+          style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: "transparent", color: "var(--text-muted)", cursor: "pointer", fontSize: 10.5, fontWeight: 700, letterSpacing: "0.03em", textTransform: "uppercase", padding: 0 }}
+        >
+          <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" style={{ transform: historyOpen ? "none" : "rotate(-90deg)", transition: "transform 0.12s" }}>
+            <polyline points="2 3 5 6 8 3" />
+          </svg>
+          <span>{t("scm.tabHistory")}</span>
+        </button>
+      </div>
+      {historyOpen && (
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <GitHistoryPanel cwd={cwd} />
         </div>
       )}
     </div>

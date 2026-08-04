@@ -114,6 +114,7 @@ export const enLocale: LocalePlugin = {
     "scm.currentBranchOnly": "Current Branch",
     "scm.loadingMore": "Loading more…",
     "scm.endOfHistory": "End of commit history",
+    "scm.moreFiles": "… and {count} more files",
     "scm.expandCommit": "View commit details",
     "scm.author": "Author",
     "scm.commitTime": "Committed",

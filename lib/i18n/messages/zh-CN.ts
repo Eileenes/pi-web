@@ -114,6 +114,7 @@ export const zhCNLocale: LocalePlugin = {
     "scm.currentBranchOnly": "当前分支",
     "scm.loadingMore": "加载更多…",
     "scm.endOfHistory": "已加载全部提交",
+    "scm.moreFiles": "… 还有 {count} 个文件",
     "scm.expandCommit": "查看提交详情",
     "scm.author": "作者",
     "scm.commitTime": "提交时间",

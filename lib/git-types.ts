@@ -41,6 +41,8 @@ export interface GitLogEntry {
   author: string;
   authorEmail: string;
   date: string;
+  /** 父提交哈希列表（按 %P 顺序，第一父在前） */
+  parents: string[];
   /** %D 装饰信息，如 ["HEAD -> feat/x", "origin/main", "tag: v1.0"] */
   refs: string[];
 }
