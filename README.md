@@ -110,17 +110,29 @@ Everything else — skins/themes, source control (SCM), model config, sessions �
 - macOS: Xcode Command Line Tools (`xcode-select --install`) for building
 - Network access to crates.io (a [Rust mirror](https://rsproxy.cn/) is recommended if crates.io is slow)
 
-### Development mode
+### Run in development mode (desktop shell)
 
-Run the Next.js dev server and the desktop shell in two terminals:
+The desktop shell loads the Next.js dev server, so start the dev server first, then launch the shell in a second terminal:
 
 ```bash
 npm install
-npm run dev          # terminal 1: Next.js dev server on http://127.0.0.1:30141
-npm run tauri dev    # terminal 2: desktop shell (loads the dev server)
+
+# terminal 1 — Next.js dev server (http://127.0.0.1:30141)
+npm run dev
+
+# terminal 2 — desktop shell (Tauri)
+npm run desktop:dev
 ```
 
-### Build a distributable app (macOS)
+`desktop:dev` is a shortcut for `tauri dev`: it compiles the Rust shell and opens a native window pointing at the dev server (configured as `devUrl` in `src-tauri/tauri.conf.json`). React changes hot-reload through the dev server; changes under `src-tauri/` are watched and trigger an automatic shell rebuild.
+
+**Prerequisites for the first run:**
+
+- Rust toolchain (`rustc` 1.77+, from [rustup](https://rustup.rs/))
+- macOS: Xcode Command Line Tools — `xcode-select --install`
+- The first compile pulls in ~500 crates from crates.io; on a slow network configure a Rust mirror (e.g. [rsproxy.cn](https://rsproxy.cn/))
+
+### Build & run the packaged app (macOS)
 
 ```bash
 npm run desktop:build
@@ -133,9 +145,16 @@ The build script (`scripts/desktop-build.mjs`) does the following automatically:
 3. Downloads the Node 22 LTS runtime to `src-tauri/resources/bin/node` (packed as a plain resource so it stays out of `Contents/MacOS/` and never shows up as a second Dock icon)
 4. Runs `tauri build`
 
-Artifacts land in `src-tauri/target/release/bundle/` as `Pi Web.app` (≈ 240 MB) and `Pi Web.dmg` (≈ 60 MB). The app is fully self-contained (bundled Node runtime + pi-web server, no system Node needed). Make sure no dev server is running on port 30141 before building.
+Artifacts land in `src-tauri/target/release/bundle/` as `Pi Web.app` (≈ 240 MB) and `Pi Web.dmg` (≈ 60 MB). The app is fully self-contained (bundled Node runtime + pi-web server, no system Node needed). Make sure no dev server is running on port 30141 before building — the build shares `.next/` with the dev server and the script aborts if 30141 is already in use.
 
-At runtime the desktop shell spawns the bundled `node server.js` on port 30141 (falling back to a free port if occupied) and waits for a health check before opening the window. Server logs go to `/tmp/piweb-desktop-server.log` for troubleshooting.
+To run the packaged app: open the `.app` (or install from the `.dmg`). The shell starts its own bundled `node server.js` on port 30141 (falling back to a free port if occupied) and waits for a health check before opening the window. Closing the window hides it to the tray; use **Quit** in the tray menu (or Cmd+Q) to exit — the shell then kills the bundled server process group so no orphan `node`/`next-server` is left behind. Server logs go to `/tmp/piweb-desktop-server.log` for troubleshooting.
+
+### Troubleshooting
+
+- **Port 30141 already in use** — the shell auto-falls back to a free port, but in dev mode the Next.js dev server owns 30141; stop it (`pkill -f "next dev"`) before a production build.
+- **Build aborts with "Dev server is running on port 30141"** — expected: `npm run desktop:build` refuses to run while the dev server is alive because both share `.next/`.
+- **Leftover `next-server` processes after quitting the app** — older builds leaked the bundled Node process on normal quit (window close was intercepted to hide-to-tray, so the cleanup path never fired). Current builds clean up on quit (Cmd+Q, tray Quit, and SIGTERM/SIGINT); if you still see orphans, `pkill -f "resources/bin/node"` once and rebuild.
+- **The window opens blank / server never becomes ready** — check `/tmp/piweb-desktop-server.log` for the Node startup error, and confirm `src-tauri/resources/pi-web/server.js` and `src-tauri/resources/bin/node` exist (both are produced by `desktop:build`).
 
 ### src-tauri layout
 
