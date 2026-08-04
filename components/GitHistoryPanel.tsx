@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GitCommitDetail, GitCommitFileChange, GitLogEntry } from "@/lib/git-types";
+import { buildCommitGraph, type GraphRow } from "@/lib/commit-graph";
 import { useI18n } from "@/hooks/useI18n";
 import { DiffView } from "./FileViewer";
 
@@ -59,6 +60,55 @@ function RefTag({ ref }: { ref: string }) {
   );
 }
 
+// ---- 提交图（VSCode 风格分支连线图） ----
+
+const GRAPH_LANE_W = 14;
+// 分支线调色板（VSCode 深浅主题通用的中等亮度色）
+const GRAPH_COLORS = [
+  "#e06c75", "#61afef", "#98c379", "#d19a66", "#c678dd",
+  "#56b6c2", "#e5c07b", "#f78c6c", "#7ec699", "#ff9e64",
+];
+
+function laneColor(i: number): string {
+  return GRAPH_COLORS[i % GRAPH_COLORS.length];
+}
+
+function CommitGraph({ row, width }: { row: GraphRow; width: number }) {
+  const x = (i: number) => i * GRAPH_LANE_W + GRAPH_LANE_W / 2;
+  return (
+    <svg
+      width={width}
+      height="100%"
+      style={{ display: "block", flexShrink: 0, alignSelf: "stretch", minHeight: 22 }}
+      aria-hidden="true"
+    >
+      {/* 进入竖线：从上一行延续到本行的线 */}
+      {row.lanesBefore.map((h, j) =>
+        h === null ? null : (
+          <line key={`in-${j}`} x1={x(j)} y1="0" x2={x(j)} y2="100%" stroke={laneColor(j)} strokeWidth={2} />
+        ),
+      )}
+      {/* 合流水平线：其它分支并入节点列 */}
+      {row.merges.map((j) => (
+        <line key={`m-${j}`} x1={x(j)} y1="50%" x2={x(row.col)} y2="50%" stroke={laneColor(j)} strokeWidth={2} />
+      ))}
+      {/* 分叉水平线：节点列分流到父提交所在列 */}
+      {row.forks.map((f) => (
+        <line key={`f-${f}`} x1={x(row.col)} y1="50%" x2={x(f)} y2="50%" stroke={laneColor(row.col)} strokeWidth={2} />
+      ))}
+      {/* 提交节点：合并提交为空心圆 */}
+      <circle
+        cx={x(row.col)}
+        cy="50%"
+        r={row.isMerge ? 5 : 3.5}
+        fill={row.isMerge ? "var(--bg-panel)" : laneColor(row.col)}
+        stroke={laneColor(row.col)}
+        strokeWidth={row.isMerge ? 1.8 : 0}
+      />
+    </svg>
+  );
+}
+
 export function GitHistoryPanel({ cwd }: Props) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -69,7 +119,7 @@ export function GitHistoryPanel({ cwd }: Props) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [all, setAll] = useState(false);
+  const [all, setAll] = useState(true);
   const requestRef = useRef(0);
 
   // 展开的提交详情
@@ -83,7 +133,35 @@ export function GitHistoryPanel({ cwd }: Props) {
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState(false);
 
+  // hover 弹窗：快速预览提交信息与文件改动
+  const [hover, setHover] = useState<{ hash: string; x: number; y: number } | null>(null);
+  const [hoverDetail, setHoverDetail] = useState<GitCommitDetail | null>(null);
+  const [hoverLoading, setHoverLoading] = useState(false);
+  const hoverDetailCacheRef = useRef(new Map<string, GitCommitDetail | null>());
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   entriesRef.current = entries;
+
+  // 提交图布局：entries 增长（分页）时全量重建；由于 lanes 状态从头连续计算，
+  // 未加载到的父提交会作为悬挂 hash 保留，加载更多后连线自然落地。
+  const graphRows = useMemo(
+    () => buildCommitGraph(entries.map((e) => ({ hash: e.hash, parents: e.parents }))),
+    [entries],
+  );
+  const graphWidth = useMemo(() => {
+    let cols = 1;
+    for (const r of graphRows) {
+      cols = Math.max(
+        cols,
+        r.lanesBefore.length,
+        r.lanesAfter.length,
+        r.col + 1,
+        ...r.merges.map((m) => m + 1),
+        ...r.forks.map((f) => f + 1),
+      );
+    }
+    return cols * GRAPH_LANE_W + GRAPH_LANE_W / 2;
+  }, [graphRows]);
 
   const loadPage = useCallback(async (reset: boolean) => {
     if (!cwd) {
@@ -134,6 +212,11 @@ export function GitHistoryPanel({ cwd }: Props) {
     }
   }, [cwd, all]);
 
+  // 组件卸载时清理 hover 定时器
+  useEffect(() => () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+  }, []);
+
   // 首屏加载：cwd 或 all 切换时重置
   useEffect(() => {
     void loadPage(true);
@@ -183,6 +266,46 @@ export function GitHistoryPanel({ cwd }: Props) {
     }
   }, [cwd, expandedHash]);
 
+  // hover 弹窗：延迟 250ms 显示，同时按需加载提交详情（带缓存）
+  const handleRowHover = useCallback((e: React.MouseEvent, hash: string) => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    const x = e.clientX;
+    const y = e.clientY;
+    hoverTimerRef.current = setTimeout(() => {
+      setHover({ hash, x, y });
+      const cached = hoverDetailCacheRef.current.get(hash);
+      if (cached !== undefined) {
+        setHoverDetail(cached);
+        setHoverLoading(false);
+        return;
+      }
+      if (!cwd) return;
+      setHoverLoading(true);
+      setHoverDetail(null);
+      void (async () => {
+        try {
+          const d = await fetchJson<GitCommitDetail>(
+            `/api/git/commit?cwd=${encodeURIComponent(cwd)}&hash=${hash}`,
+          );
+          hoverDetailCacheRef.current.set(hash, d);
+          setHoverDetail(d);
+        } catch {
+          hoverDetailCacheRef.current.set(hash, null);
+          setHoverDetail(null);
+        } finally {
+          setHoverLoading(false);
+        }
+      })();
+    }, 250);
+  }, [cwd]);
+
+  const handleRowLeave = useCallback(() => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    setHover(null);
+    setHoverDetail(null);
+    setHoverLoading(false);
+  }, []);
+
   const loadFileDiff = useCallback(async (path: string) => {
     if (!cwd || !expandedHash) return;
     if (diffPath === path) {
@@ -208,18 +331,6 @@ export function GitHistoryPanel({ cwd }: Props) {
       setDiffLoading(false);
     }
   }, [cwd, expandedHash, diffPath]);
-
-  const formatRelativeTime = (dateStr: string): string => {
-    const diff = Date.now() - new Date(dateStr).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return t("scm.justNow");
-    if (mins < 60) return t("scm.minutesAgo", { count: mins });
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return t("scm.hoursAgo", { count: hours });
-    const days = Math.floor(hours / 24);
-    if (days < 7) return t("scm.daysAgo", { count: days });
-    return new Date(dateStr).toLocaleDateString();
-  };
 
   if (!cwd) {
     return (
@@ -271,7 +382,11 @@ export function GitHistoryPanel({ cwd }: Props) {
       </div>
 
       {/* Scrollable list */}
-      <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
+      <div
+        ref={scrollRef}
+        onScroll={handleRowLeave}
+        style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}
+      >
         {loading ? (
           <div style={{ padding: 16, fontSize: 12, color: "var(--text-dim)", textAlign: "center" }}>{t("scm.loading")}</div>
         ) : error ? (
@@ -281,49 +396,64 @@ export function GitHistoryPanel({ cwd }: Props) {
             {t("scm.noCommits")}
           </div>
         ) : (
-          entries.map((entry) => {
+          entries.map((entry, idx) => {
             const isExpanded = expandedHash === entry.hash;
+            const row = graphRows[idx];
             return (
               <div key={entry.hash} style={{ borderBottom: "1px solid var(--border)" }}>
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   onClick={() => void toggleDetail(entry.hash)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      void toggleDetail(entry.hash);
+                    }
+                  }}
                   title={t("scm.expandCommit")}
                   aria-expanded={isExpanded}
                   style={{
-                    display: "flex", alignItems: "center", gap: 6,
-                    width: "100%", minWidth: 0, padding: "6px 8px",
-                    border: "none", background: isExpanded ? "var(--bg-selected)" : "transparent",
-                    color: "var(--text)", cursor: "pointer", textAlign: "left",
+                    display: "flex", alignItems: "stretch", minWidth: 0, height: 26,
+                    background: isExpanded ? "var(--bg-selected)" : "transparent",
                   }}
-                  onMouseEnter={(e) => { if (!isExpanded) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                  onMouseLeave={(e) => { if (!isExpanded) e.currentTarget.style.background = "transparent"; }}
+                  onMouseEnter={(e) => {
+                    if (!isExpanded) e.currentTarget.style.background = "var(--bg-hover)";
+                    handleRowHover(e, entry.hash);
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isExpanded) e.currentTarget.style.background = "transparent";
+                    handleRowLeave();
+                  }}
                 >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
-                      {entry.refs.map((ref) => <RefTag key={ref} ref={ref} />)}
-                      <span style={{
+                  {row && <CommitGraph row={row} width={graphWidth} />}
+                  <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6, paddingRight: 4 }}>
+                    <span
+                      title={entry.subject}
+                      style={{
                         flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                        fontSize: 12, fontWeight: 600, color: "var(--text)",
-                      }}>
-                        {entry.subject}
-                      </span>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, fontSize: 10, color: "var(--text-dim)", minWidth: 0 }}>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 110 }}>{entry.author}</span>
-                      <span style={{ flexShrink: 0 }}>·</span>
-                      <span style={{ flexShrink: 0 }}>{formatRelativeTime(entry.date)}</span>
-                      <span style={{ flex: 1 }} />
-                      <span style={{ flexShrink: 0, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>{entry.shortHash}</span>
-                    </div>
+                        fontSize: 12, fontWeight: 500, color: "var(--text)",
+                      }}
+                    >
+                      {entry.subject}
+                    </span>
+                    <span
+                      title={entry.author}
+                      style={{
+                        flexShrink: 0, fontSize: 10, color: "var(--text-dim)",
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 72,
+                      }}
+                    >
+                      {entry.author.split(" ")[0]}
+                    </span>
                   </div>
-                  <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="var(--text-dim)" strokeWidth="1.6" style={{ flexShrink: 0, transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.12s" }}>
+                  <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="var(--text-dim)" strokeWidth="1.6" style={{ flexShrink: 0, alignSelf: "center", marginRight: 6, transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.12s" }}>
                     <polyline points="2 3 5 6 8 3" />
                   </svg>
-                </button>
+                </div>
 
                 {isExpanded && (
-                  <div style={{ padding: "2px 8px 8px", background: "var(--bg-selected)", minWidth: 0 }}>
+                  <div style={{ padding: `2px 8px 8px ${graphWidth + 6}px`, background: "var(--bg-selected)", minWidth: 0 }}>
                     {detailLoading ? (
                       <div style={{ padding: "8px 2px", fontSize: 11, color: "var(--text-dim)" }}>{t("scm.loading")}</div>
                     ) : detailError ? (
@@ -423,6 +553,71 @@ export function GitHistoryPanel({ cwd }: Props) {
           </div>
         )}
       </div>
+
+      {/* hover 弹窗：快速预览提交信息与文件改动 */}
+      {hover && (() => {
+        const entry = entries.find((e) => e.hash === hover.hash);
+        if (!entry) return null;
+        const cardWidth = 300;
+        const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
+        const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+        const left = Math.max(8, Math.min(hover.x + 14, vw - cardWidth - 12));
+        const top = Math.max(8, Math.min(hover.y - 12, vh - 360));
+        return (
+          <div
+            role="tooltip"
+            style={{
+              position: "fixed", top, left, zIndex: 500, width: cardWidth, maxHeight: 340,
+              overflowY: "auto", background: "var(--bg-panel)",
+              border: "1px solid var(--border)", borderRadius: 8,
+              boxShadow: "0 10px 30px rgba(0,0,0,0.18)", padding: 8,
+              fontSize: 11, pointerEvents: "none",
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.4, wordBreak: "break-word" }}>
+              {entry.subject}
+            </div>
+            {entry.refs.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 2, marginTop: 4 }}>
+                {entry.refs.map((ref) => <RefTag key={ref} ref={ref} />)}
+              </div>
+            )}
+            <div style={{ marginTop: 5, display: "flex", flexDirection: "column", gap: 2 }}>
+              <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>{entry.hash}</span>
+              <span style={{ color: "var(--text-muted)" }}>{entry.author} &lt;{entry.authorEmail}&gt;</span>
+              <span style={{ color: "var(--text-dim)" }}>{new Date(entry.date).toLocaleString()}</span>
+            </div>
+            <div style={{ borderTop: "1px solid var(--border)", margin: "7px 0 5px" }} />
+            {hoverLoading ? (
+              <div style={{ padding: "4px 0", color: "var(--text-dim)" }}>{t("scm.loading")}</div>
+            ) : hoverDetail ? (
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {hoverDetail.files.slice(0, 20).map((f) => {
+                  const meta = FILE_STATUS_META[f.status];
+                  return (
+                    <div key={f.path} style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, padding: "1.5px 0" }}>
+                      <span style={{ flexShrink: 0, width: 13, fontSize: 9.5, fontWeight: 700, textAlign: "center", color: meta.color, fontFamily: "var(--font-mono)" }}>{meta.code}</span>
+                      <span title={f.path} style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "var(--font-mono)", fontSize: 10 }}>{f.path}</span>
+                      <span style={{ flexShrink: 0, fontSize: 9.5, fontVariantNumeric: "tabular-nums", color: "var(--text-dim)" }}>
+                        <span style={{ color: "var(--diff-add)" }}>+{f.additions}</span>{" "}
+                        <span style={{ color: "var(--diff-del)" }}>−{f.deletions}</span>
+                      </span>
+                    </div>
+                  );
+                })}
+                {hoverDetail.files.length === 0 && (
+                  <div style={{ color: "var(--text-dim)", padding: "2px 0" }}>{t("scm.noFileChanges")}</div>
+                )}
+                {hoverDetail.files.length > 20 && (
+                  <div style={{ color: "var(--text-dim)", fontSize: 10, marginTop: 3 }}>{t("scm.moreFiles", { count: hoverDetail.files.length - 20 })}</div>
+                )}
+              </div>
+            ) : (
+              <div style={{ color: "var(--text-dim)", padding: "2px 0" }}>{t("scm.loadFailed")}</div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

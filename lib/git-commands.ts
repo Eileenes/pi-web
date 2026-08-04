@@ -126,13 +126,13 @@ export async function getGitLog(cwd: string, options: GitLogOptions = {}): Promi
   args.push(
     "-n", String(count),
     ...(offset > 0 ? ["--skip", String(offset)] : []),
-    "--format=%H%x00%h%x00%s%x00%an%x00%ae%x00%ad%x00%D",
+    "--format=%H%x00%h%x00%s%x00%an%x00%ae%x00%ad%x00%P%x00%D",
     "--date=iso-strict",
   );
   const result = await runGit(cwd, args);
   if (!result.ok) return [];
   return result.stdout.split("\n").filter(Boolean).map((line) => {
-    const [hash, shortHash, subject, author, authorEmail, date, refsField] = line.split("\0");
+    const [hash, shortHash, subject, author, authorEmail, date, parentsField, refsField] = line.split("\0");
     return {
       hash,
       shortHash,
@@ -140,6 +140,7 @@ export async function getGitLog(cwd: string, options: GitLogOptions = {}): Promi
       author,
       authorEmail: authorEmail ?? "",
       date,
+      parents: (parentsField ?? "").split(" ").filter(Boolean),
       refs: parseRefs(refsField ?? ""),
     };
   });
