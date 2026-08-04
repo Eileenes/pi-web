@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -15,6 +16,39 @@ use crate::ServerState;
 const DEFAULT_PORT: u16 = 30141;
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// 服务日志超过该大小后下次启动截断，防止 /tmp 日志无限增长。
+const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024;
+
+/// 当前 node 侧车 PID，供信号 handler 在进程被强杀时做进程组清理。
+static NODE_PID: AtomicI32 = AtomicI32::new(0);
+
+/// SIGTERM/SIGINT/SIGHUP 兜底：主进程被 kill 时按进程组清理 node 侧车。
+/// libc::kill(2) 是 async-signal-safe 函数，可以直接在 handler 中调用；
+/// 清理完后恢复默认处理并重发信号，让进程按系统默认方式终止。
+#[cfg(unix)]
+extern "C" fn handle_kill_signal(sig: libc::c_int) {
+    let pid = NODE_PID.load(Ordering::SeqCst);
+    if pid > 0 {
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    unsafe {
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+    }
+}
+
+/// 注册强杀兜底信号处理（dev 模式不 spawn node，NODE_PID 为 0，无副作用）。
+pub fn install_signal_handlers() {
+    #[cfg(unix)]
+    unsafe {
+        let handler = handle_kill_signal as *const () as libc::sighandler_t;
+        libc::signal(libc::SIGTERM, handler);
+        libc::signal(libc::SIGINT, handler);
+        libc::signal(libc::SIGHUP, handler);
+    }
+}
 
 /// pi-web 运行目录（构建时由 scripts/desktop-build.mjs 拷入 resources/pi-web）。
 /// Next standalone 运行时：server.js + .next + 裁剪后的 node_modules。
@@ -116,11 +150,17 @@ pub fn start(app: &AppHandle) -> Result<String, String> {
         .current_dir(&piweb)
         .env("PORT", port.to_string())
         .env("HOSTNAME", "127.0.0.1");
-    // 把 node 服务的输出落到日志文件，便于排查启动问题
-    if let Ok(log_file) = OpenOptions::new().create(true).append(true).open("/tmp/piweb-desktop-server.log") {
+    // 把 node 服务的输出落到日志文件，便于排查启动问题；日志过大时截断重写
+    let log_path = "/tmp/piweb-desktop-server.log";
+    if let Ok(meta) = std::fs::metadata(log_path) {
+        if meta.len() > MAX_LOG_BYTES {
+            let _ = std::fs::remove_file(log_path);
+        }
+    }
+    if let Ok(log_file) = OpenOptions::new().create(true).append(true).open(log_path) {
         let out = log_file.try_clone().unwrap_or(log_file);
         cmd.stdout(Stdio::from(out));
-        if let Ok(err_file) = OpenOptions::new().create(true).append(true).open("/tmp/piweb-desktop-server.log") {
+        if let Ok(err_file) = OpenOptions::new().create(true).append(true).open(log_path) {
             cmd.stderr(Stdio::from(err_file));
         } else {
             cmd.stderr(Stdio::null());
@@ -142,6 +182,7 @@ pub fn start(app: &AppHandle) -> Result<String, String> {
     }
     let child = cmd.spawn().map_err(|e| format!("failed to spawn pi-web server: {e}"))?;
     let pid = child.id();
+    NODE_PID.store(pid as i32, Ordering::SeqCst);
 
     *app.state::<ServerState>().0.lock().expect("server state lock") = Some((child, pid));
 
@@ -192,6 +233,7 @@ pub fn shutdown(app: &AppHandle) {
         }
         let _ = child.kill();
         let _ = child.wait();
+        NODE_PID.store(0, Ordering::SeqCst);
     }
 }
 

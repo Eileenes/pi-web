@@ -106,17 +106,29 @@ Pi Web 同时提供基于 [Tauri](https://v2.tauri.app/) 的原生桌面壳（`s
 - macOS：需要 Xcode Command Line Tools（`xcode-select --install`）用于编译
 - 能访问 crates.io（国内网络建议配置 [Rust 镜像](https://rsproxy.cn/)）
 
-### 开发模式
+### 开发模式启动（桌面壳）
 
-分两个终端运行 Next.js 开发服务器和桌面壳：
+桌面壳加载的是 Next.js 开发服务器，所以先启动开发服务器，再在另一个终端启动桌面壳：
 
 ```bash
 npm install
-npm run dev          # 终端 1：Next.js 开发服务器，http://127.0.0.1:30141
-npm run tauri dev    # 终端 2：桌面壳（加载上面的开发服务器）
+
+# 终端 1 — Next.js 开发服务器（http://127.0.0.1:30141）
+npm run dev
+
+# 终端 2 — 桌面壳（Tauri）
+npm run desktop:dev
 ```
 
-### 打包可分发的应用（macOS）
+`desktop:dev` 是 `tauri dev` 的快捷方式：编译 Rust 壳并打开一个原生窗口，加载开发服务器（`src-tauri/tauri.conf.json` 中的 `devUrl`）。React 代码改动通过开发服务器热更新；`src-tauri/` 下的改动会被监听并自动触发壳的重新编译。
+
+**首次运行前置条件：**
+
+- Rust 工具链（`rustc` 1.77+，用 [rustup](https://rustup.rs/) 安装）
+- macOS：Xcode Command Line Tools — `xcode-select --install`
+- 首次编译会从 crates.io 拉取约 500 个 crate；网络慢时建议配置 [Rust 镜像](https://rsproxy.cn/)
+
+### 打包可分发应用（macOS）
 
 ```bash
 npm run desktop:build
@@ -129,9 +141,16 @@ npm run desktop:build
 3. 下载 Node 22 LTS 运行时到 `src-tauri/resources/bin/node`（作为普通资源打包，不进入 `Contents/MacOS/`，因此不会在 Dock 出现第二个图标）
 4. 执行 `tauri build`
 
-产物在 `src-tauri/target/release/bundle/` 下：`Pi Web.app`（约 240MB）与 `Pi Web.dmg`（约 60MB）。应用完全自包含（内置 Node 运行时 + pi-web 服务，无需系统安装 Node）。构建前请确保 30141 端口没有被开发服务器占用。
+产物在 `src-tauri/target/release/bundle/` 下：`Pi Web.app`（约 240MB）与 `Pi Web.dmg`（约 60MB）。应用完全自包含（内置 Node 运行时 + pi-web 服务，无需系统安装 Node）。构建前请确保 30141 端口没有被开发服务器占用——构建会与开发服务器共享 `.next/`，如果 30141 已被占用，脚本会直接终止。
 
-运行时，桌面壳会启动内置的 `node server.js`，默认端口 30141（被占用时自动换空闲端口），健康检查通过后才创建窗口。服务日志写在 `/tmp/piweb-desktop-server.log`，便于排查启动问题。
+运行打包产物：打开 `.app`（或从 `.dmg` 安装）。壳会启动内置的 `node server.js`，默认端口 30141（被占用时自动换空闲端口），健康检查通过后才创建窗口。关闭窗口只是隐藏到托盘；从托盘菜单选择“退出”（或 Cmd+Q）才会退出——壳会按进程组清理内置服务进程，不会留下孤儿 `node`/`next-server`。服务日志写在 `/tmp/piweb-desktop-server.log`，便于排查启动问题。
+
+### 常见问题排查
+
+- **30141 端口被占用**——生产模式会自动换空闲端口；但开发模式下 30141 属于 Next.js 开发服务器，做生产构建前需先停掉它（`pkill -f "next dev"`）。
+- **构建报 “Dev server is running on port 30141”**——符合预期：`npm run desktop:build` 检测到开发服务器在运行时会拒绝执行（两者共享 `.next/`）。
+- **退出应用后残留 `next-server` 进程**——旧版本在正常退出时（窗口关闭被拦截为隐藏到托盘）会漏掉清理路径，导致内置 Node 进程泄漏。当前版本在退出（Cmd+Q、托盘“退出”、以及 SIGTERM/SIGINT）时都会清理；若仍有残留，手动 `pkill -f "resources/bin/node"` 清理一次后重新打包即可。
+- **窗口空白 / 服务一直没就绪**——查看 `/tmp/piweb-desktop-server.log` 里的 Node 启动报错，并确认 `src-tauri/resources/pi-web/server.js` 与 `src-tauri/resources/bin/node` 存在（两者都由 `desktop:build` 生成）。
 
 ### src-tauri 目录结构
 
