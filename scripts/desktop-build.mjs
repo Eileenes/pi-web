@@ -14,7 +14,7 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, copyFileSync, chmodSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, copyFileSync, chmodSync, readdirSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
@@ -185,6 +185,66 @@ async function packPiWeb() {
   log(`pi-web runtime packed (${size})`);
 }
 
+/**
+ * 对 resources 里所有 Mach-O 二进制做 Developer ID 签名（公证硬性要求：
+ * bundle 内每个二进制都必须有有效签名 + 安全时间戳）。
+ * Tauri 只签 app 主二进制；node_modules 里的原生库（sharp 等）是 npm 的
+ * ad-hoc 签名，不重新签名会导致 Apple 公证拒绝。
+ */
+function deepSignMachO() {
+  if (PLATFORM !== "darwin") return;
+  let identity;
+  try {
+    const config = JSON.parse(readFileSync(path.join(SRC_TAURI, "tauri.conf.json"), "utf8"));
+    identity = config?.bundle?.macOS?.signingIdentity;
+  } catch {
+    identity = undefined;
+  }
+  if (!identity || identity === "-") {
+    console.log("  (no macOS signingIdentity configured, skipping deep sign)");
+    return;
+  }
+  log("Deep-signing Mach-O binaries in resources");
+
+  // 其余 Mach-O（sharp 原生库等）：有效签名 + 时间戳即可，无需 hardened runtime，
+  // 加了反而可能拦截库加载。bin/node 排除（单独在下面处理）。
+  const script = `
+    find "${SRC_TAURI}/resources" -type f ! -path "*/bin/node" -print0 | while IFS= read -r -d "" f; do
+      if file "$f" | grep -q "Mach-O"; then
+        codesign --force --timestamp --sign "${identity}" "$f" || exit 1
+      fi
+    done
+  `;
+  execSync(script, { stdio: "inherit", cwd: SRC_TAURI });
+
+  // node 侧车（最后签，避免被上面的通用签名覆盖）：公证要求主可执行开启
+  // hardened runtime；但 V8 JIT 需要 allow-jit/allow-unsigned-executable-memory
+  // entitlement，否则 SIGTRAP 崩溃。
+  const nodeBin = path.join(BINARIES_DIR, "node");
+  const entitlements = path.join(SRC_TAURI, "entitlements-node.plist");
+  writeFileSync(
+    entitlements,
+    `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>
+`,
+    "utf8",
+  );
+  if (existsSync(nodeBin)) {
+    execSync(
+      `codesign --force --options runtime --entitlements "${entitlements}" --timestamp --sign "${identity}" "${nodeBin}"`,
+      { stdio: "inherit", cwd: SRC_TAURI },
+    );
+  }
+}
+
 async function main() {
   checkDevServer();
 
@@ -193,6 +253,7 @@ async function main() {
 
   await packPiWeb();
   await downloadNodeRuntime();
+  deepSignMachO();
 
   log("4/4 Tauri build");
   run("npx", ["tauri", "build"], { cwd: SRC_TAURI });

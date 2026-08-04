@@ -33,6 +33,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources"]
+    "resources": ["resources"],
+    "macOS": {
+      "signingIdentity": "Developer ID Application: Duke Tao (8RK3WCWST9)",
+      "hardenedRuntime": true
+    }
   }
 }
